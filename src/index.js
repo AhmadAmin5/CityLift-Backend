@@ -1,4 +1,5 @@
-import dotenv from "dotenv/config";
+import dotenv from "dotenv";
+dotenv.config();
 import app from "./app.js";
 import connectMongoDB from "./db/mongodb.js";
 import connectPostgres from "./db/postgres.js";
