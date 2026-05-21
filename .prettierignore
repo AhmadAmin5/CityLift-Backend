@@ -1,0 +1,29 @@
+# dependencies
+node_modules
+
+# build outputs
+dist
+build
+coverage
+
+# environment files
+.env
+.env.*
+
+# lock file
+package.json
+package-lock.json
+
+# logs
+*.log
+logs
+
+# system files
+.DS_Store
+Thumbs.db
+
+# IDE configs
+.vscode
+.idea
+.git
+node_modules

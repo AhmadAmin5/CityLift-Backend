@@ -1,0 +1,27 @@
+# dependencies
+node_modules
+npm-debug.log*
+
+# environment variables
+.env
+.env.test
+.env.production
+.env.local
+
+# build outputs
+dist
+build
+coverage
+
+# logs
+logs
+*.log
+
+# system files
+.DS_Store
+Thumbs.db
+
+# IDE/project settings
+.vscode
+.idea
+*.swp
