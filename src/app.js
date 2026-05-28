@@ -16,6 +16,9 @@ app.get(ApiVersion + "/", (req, res) => {
     res.status(200).json({ status: "ok", message: "Server is awake" });
 });
 
+import authRoutes from "./routes/auth.routes.js";
+app.use(ApiVersion + "/auth", authRoutes);
+
 app.use(errorHandler);
 
 export default app;

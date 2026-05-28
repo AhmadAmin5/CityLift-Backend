@@ -5,10 +5,7 @@ import logger from "../utils/logger.js";
 
 const connectionString = process.env.POSTGRES_URI;
 
-const ssl =
-    process.env.POSTGRES_SSL === "true"
-        ? { rejectUnauthorized: false }
-        : false;
+const ssl = process.env.POSTGRES_SSL === "true" ? { rejectUnauthorized: false } : false;
 
 const adapter = new PrismaPg({
     connectionString,
