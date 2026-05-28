@@ -17,7 +17,10 @@ app.get(ApiVersion + "/", (req, res) => {
 });
 
 import authRoutes from "./routes/auth.routes.js";
+import userRoutes from "./routes/user.routes.js";
+
 app.use(ApiVersion + "/auth", authRoutes);
+app.use(ApiVersion + "/users", userRoutes);
 
 app.use(errorHandler);
 
