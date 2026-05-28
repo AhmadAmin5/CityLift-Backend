@@ -2,7 +2,13 @@ import { Router } from "express";
 
 import verifyJWT from "../middlewares/auth.middleware.js";
 
-import { registerDriver, registerRider, loginUser, logoutUser, getCurrentUser } from "../controllers/auth.controller.js";
+import {
+    registerDriver,
+    registerRider,
+    loginUser,
+    logoutUser,
+    getCurrentUser
+} from "../controllers/auth.controller.js";
 
 const router = Router();
 

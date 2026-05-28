@@ -8,8 +8,7 @@ import verifyJWT from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
-router.post('/me/profile-photo', verifyJWT, upload.single("profile_photo"), uploadProfilePhoto);
-router.patch('/me', verifyJWT, updateCurrentUserProfile);
-
+router.post("/me/profile-photo", verifyJWT, upload.single("profile_photo"), uploadProfilePhoto);
+router.patch("/me", verifyJWT, updateCurrentUserProfile);
 
 export default router;

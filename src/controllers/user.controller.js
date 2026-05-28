@@ -22,24 +22,15 @@ const uploadProfilePhoto = asyncHandler(async (req, res) => {
     let cloudinaryResponse;
 
     try {
-        cloudinaryResponse = await uploadToCloudinary(
-            req.file.buffer,
-            "profilePictures"
-        );
+        cloudinaryResponse = await uploadToCloudinary(req.file.buffer, "profilePictures");
     } catch (error) {
         console.error("Cloudinary Upload Error:", error);
 
-        throw new ApiError(
-            500,
-            "Failed to upload profile picture"
-        );
+        throw new ApiError(500, "Failed to upload profile picture");
     }
 
     if (!cloudinaryResponse?.secure_url) {
-        throw new ApiError(
-            500,
-            "Cloudinary did not return image URL"
-        );
+        throw new ApiError(500, "Cloudinary did not return image URL");
     }
 
     const updatedUser = await prisma.user.update({
@@ -87,10 +78,7 @@ const updateCurrentUserProfile = asyncHandler(async (req, res) => {
     const { name, email, phone } = req.body;
 
     if (!name && !email && !phone) {
-        throw new ApiError(
-            400,
-            "At least one field is required"
-        );
+        throw new ApiError(400, "At least one field is required");
     }
 
     const updateData = {};
@@ -100,7 +88,6 @@ const updateCurrentUserProfile = asyncHandler(async (req, res) => {
     }
 
     if (email && email !== currentUser.email) {
-
         const existingEmailUser = await prisma.user.findFirst({
             where: {
                 email,
@@ -111,10 +98,7 @@ const updateCurrentUserProfile = asyncHandler(async (req, res) => {
         });
 
         if (existingEmailUser) {
-            throw new ApiError(
-                409,
-                "Email is already in use"
-            );
+            throw new ApiError(409, "Email is already in use");
         }
 
         updateData.email = email;
@@ -125,7 +109,6 @@ const updateCurrentUserProfile = asyncHandler(async (req, res) => {
 
     // Update phone
     if (phone && phone !== currentUser.phone) {
-
         // Check phone uniqueness
         const existingPhoneUser = await prisma.user.findFirst({
             where: {
@@ -137,10 +120,7 @@ const updateCurrentUserProfile = asyncHandler(async (req, res) => {
         });
 
         if (existingPhoneUser) {
-            throw new ApiError(
-                409,
-                "Phone number is already in use"
-            );
+            throw new ApiError(409, "Phone number is already in use");
         }
 
         updateData.phone = phone;

@@ -251,12 +251,12 @@ const getCurrentUser = asyncHandler(async (req, res) => {
     });
 
     if (!user) {
-        throw new ApiError(404, 'User not found');
+        throw new ApiError(404, "User not found");
     }
 
     return res.status(200).json({
         success: true,
-        message: 'Current user fetched successfully',
+        message: "Current user fetched successfully",
         data: {
             user: {
                 id: user.id,
@@ -274,9 +274,7 @@ const getCurrentUser = asyncHandler(async (req, res) => {
                 ? {
                       id: user.riderProfile.id,
                       user_id: user.riderProfile.userId,
-                      average_rating: Number(
-                          user.riderProfile.averageRating
-                      ),
+                      average_rating: Number(user.riderProfile.averageRating),
                       total_rides: user.riderProfile.totalRides
                   }
                 : null,
@@ -284,13 +282,10 @@ const getCurrentUser = asyncHandler(async (req, res) => {
                 ? {
                       id: user.driverProfile.id,
                       user_id: user.driverProfile.userId,
-                      average_rating: Number(
-                          user.driverProfile.averageRating
-                      ),
+                      average_rating: Number(user.driverProfile.averageRating),
                       total_rides: user.driverProfile.totalRides,
                       is_available: user.driverProfile.isAvailable,
-                      approval_status:
-                          user.driverProfile.approvalStatus
+                      approval_status: user.driverProfile.approvalStatus
                   }
                 : null
         },
@@ -301,7 +296,7 @@ const getCurrentUser = asyncHandler(async (req, res) => {
 const logoutUser = asyncHandler(async (req, res) => {
     return res.status(200).json({
         success: true,
-        message: 'Logged out successfully',
+        message: "Logged out successfully",
         data: null,
         meta: null
     });
