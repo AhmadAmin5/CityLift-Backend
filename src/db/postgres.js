@@ -1,5 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../generated/prisma/client.ts";
+import pkg from "../generated/prisma/index.js";
+const { PrismaClient } = pkg;
 import logger from "../utils/logger.js";
 
 const connectionString = process.env.POSTGRES_URI;

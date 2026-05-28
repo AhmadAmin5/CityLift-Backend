@@ -1,13 +1,88 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// prisma/schema.prisma
 
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client-js"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// ----------------------------------------------------------------------
+// ENUMS (Sourced from api-contract.md Section 3)
+// ----------------------------------------------------------------------
+
+// 3.1 User Roles
+enum Role {
+  rider
+  driver
+  admin
+}
+
+// 3.3 Driver Approval Status
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  suspended
+}
+
+// ----------------------------------------------------------------------
+// MODELS (Sourced from update-database-design.md Section 4)
+// ----------------------------------------------------------------------
+
+model User {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String    @db.VarChar(100)
+  email           String    @unique @db.VarChar(150)
+  phone           String    @unique @db.VarChar(30)
+  passwordHash    String    @map("password_hash") @db.Text
+  role            Role
+  profilePhotoUrl String?   @map("profile_photo_url") @db.Text
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz
+  phoneVerifiedAt DateTime? @map("phone_verified_at") @db.Timestamptz
+  
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  riderProfile    Rider?
+  driverProfile   Driver?
+
+  @@map("users")
+}
+
+model Rider {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  
+  userId        String   @unique @map("user_id") @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  averageRating Decimal? @default(5.00) @map("average_rating") @db.Decimal(3, 2)
+  totalRides    Int?     @default(0) @map("total_rides")
+  
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("riders")
+}
+
+model Driver {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  
+  userId         String         @unique @map("user_id") @db.Uuid
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  averageRating  Decimal?       @default(5.00) @map("average_rating") @db.Decimal(3, 2)
+  totalRides     Int?           @default(0) @map("total_rides")
+  
+  isAvailable    Boolean?       @default(false) @map("is_available")
+  approvalStatus ApprovalStatus @default(pending) @map("approval_status")
+  
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("drivers")
 }
