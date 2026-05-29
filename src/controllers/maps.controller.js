@@ -3,15 +3,10 @@ import DriverLocation from "../models/driverLocation.model.js";
 import SurgeZone from "../models/surgeZone.model.js";
 import ApiError from "../utils/ApiError.js";
 import asyncHandler from "../utils/asyncHandler.js";
-import {
-    reverseGeocode as mapboxReverseGeocode,
-    getRouteDirections
-} from "../services/mapbox.service.js";
+import { reverseGeocode as mapboxReverseGeocode } from "../services/mapbox.service.js";
 
-import {
-    googlePlacesAutocomplete,
-    getGooglePlaceDetails
-} from "../services/googlePlaces.service.js";
+import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
+import { googlePlacesAutocomplete, getGooglePlaceDetails } from "../services/googlePlaces.service.js";
 
 // Haversine distance utility
 const haversineDistance = (lat1, lon1, lat2, lon2) => {
@@ -98,14 +93,7 @@ const getMapConfig = asyncHandler(async (req, res) => {
  * 12.2 Places Autocomplete
  */
 const autocomplete = asyncHandler(async (req, res) => {
-    const {
-        query,
-        latitude,
-        longitude,
-        limit,
-        session_token,
-        type_preset
-    } = req.query;
+    const { query, latitude, longitude, limit, session_token, type_preset } = req.query;
 
     if (!query) {
         throw new ApiError(400, "Query parameter is required");
@@ -113,15 +101,9 @@ const autocomplete = asyncHandler(async (req, res) => {
 
     const searchLimit = limit ? Math.min(Number(limit), 10) : 5;
 
-    const lat =
-        latitude !== undefined && Number.isFinite(Number(latitude))
-            ? Number(latitude)
-            : undefined;
+    const lat = latitude !== undefined && Number.isFinite(Number(latitude)) ? Number(latitude) : undefined;
 
-    const lon =
-        longitude !== undefined && Number.isFinite(Number(longitude))
-            ? Number(longitude)
-            : undefined;
+    const lon = longitude !== undefined && Number.isFinite(Number(longitude)) ? Number(longitude) : undefined;
 
     const data = await googlePlacesAutocomplete({
         query,
@@ -254,35 +236,11 @@ const getRoutePreview = asyncHandler(async (req, res) => {
     const intermediateStops = Array.isArray(stops) ? stops : [];
     const vehicleType = vehicle_type || "car";
 
-    let data = await getRouteDirections(origin, destination, intermediateStops, vehicleType);
+    let data = await getGoogleRouteDirections(origin, destination, intermediateStops, vehicleType);
 
     // Fallback mock routing if Mapbox fails or isn't configured
     if (!data) {
-        const dist = haversineDistance(
-            origin.latitude,
-            origin.longitude,
-            destination.latitude,
-            destination.longitude
-        );
-        const normal_duration_min = Math.max(2, Math.round(dist * 2.2));
-        const traffic_duration_min = normal_duration_min + Math.floor(Math.random() * 5) + 2;
-        const traffic_delay_min = traffic_duration_min - normal_duration_min;
-
-        data = {
-            route: {
-                route_id: `preview_route_${Date.now()}`,
-                ride_id: null,
-                route_type: "pickup_to_dropoff",
-                provider: "mapbox",
-                selected: true,
-                distance_km: Number(dist.toFixed(2)),
-                normal_duration_min,
-                traffic_duration_min,
-                traffic_delay_min,
-                polyline: "_p~iF~ps|U_ulLnnqC_mqNvxq@",
-                steps: []
-            }
-        };
+    throw new ApiError(503, "Route preview is currently unavailable. Please try again.");
     } else {
         // Envelop route field to match contract
         data = {
