@@ -1,0 +1,593 @@
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider     = "postgresql"
+  relationMode = "foreignKeys"
+}
+
+//////////////////////////////////////////////////////
+// ENUMS
+//////////////////////////////////////////////////////
+
+enum UserRole {
+  rider
+  driver
+  admin
+}
+
+enum DriverApprovalStatus {
+  pending
+  approved
+  rejected
+  suspended
+}
+
+enum DocumentType {
+  cnic
+  license
+  vehicle_registration
+}
+
+enum DocumentStatus {
+  pending
+  approved
+  rejected
+}
+
+enum VehicleType {
+  car
+  bike
+  rickshaw
+}
+
+enum SavedPlaceType {
+  home
+  work
+  favorite
+}
+
+enum RideType {
+  standard
+  scheduled
+  recurring
+}
+
+enum RideStatus {
+  requested
+  searching_driver
+  driver_assigned
+  accepted
+  arrived
+  started
+  completed
+  cancelled
+}
+
+enum StopType {
+  pickup
+  intermediate
+  dropoff
+}
+
+enum RideOfferStatus {
+  sent
+  accepted
+  declined
+  expired
+}
+
+//////////////////////////////////////////////////////
+// USERS
+//////////////////////////////////////////////////////
+
+model User {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String    @db.VarChar(100)
+  email           String    @unique @db.VarChar(150)
+  phone           String    @unique @db.VarChar(30)
+  passwordHash    String    @map("password_hash")
+  role            UserRole
+  profilePhotoUrl String?   @map("profile_photo_url")
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz
+  phoneVerifiedAt DateTime? @map("phone_verified_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  riderProfile  Rider?
+  driverProfile Driver?
+
+  cancelledRides Ride[]              @relation("CancelledByUser")
+  statusChanges  RideStatusHistory[]
+
+  @@index([role], map: "idx_users_role")
+  @@map("users")
+}
+
+//////////////////////////////////////////////////////
+// RIDERS
+//////////////////////////////////////////////////////
+
+model Rider {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @unique @map("user_id") @db.Uuid
+
+  averageRating Decimal @default(5.00) @map("average_rating") @db.Decimal(3, 2)
+  totalRides    Int     @default(0) @map("total_rides")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  rides       Ride[]
+  savedPlaces SavedPlace[]
+  ratings     Rating[]
+
+  @@index([userId], map: "idx_riders_user_id")
+  @@map("riders")
+}
+
+//////////////////////////////////////////////////////
+// DRIVERS
+//////////////////////////////////////////////////////
+
+model Driver {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @unique @map("user_id") @db.Uuid
+
+  averageRating Decimal @default(5.00) @map("average_rating") @db.Decimal(3, 2)
+  totalRides    Int     @default(0) @map("total_rides")
+
+  isAvailable Boolean @default(false) @map("is_available")
+
+  approvalStatus DriverApprovalStatus @default(pending) @map("approval_status")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  vehicles   Vehicle[]
+  documents  DriverDocument[]
+  rides      Ride[]
+  rideOffers RideOffer[]
+  ratings    Rating[]
+
+  @@index([userId], map: "idx_drivers_user_id")
+  @@index([isAvailable], map: "idx_drivers_available")
+  @@index([approvalStatus], map: "idx_drivers_approval_status")
+  @@map("drivers")
+}
+
+//////////////////////////////////////////////////////
+// VEHICLES
+//////////////////////////////////////////////////////
+
+model Vehicle {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  driverId String @map("driver_id") @db.Uuid
+
+  make  String @db.VarChar(50)
+  model String @db.VarChar(50)
+
+  year Int?
+
+  plateNumber String @unique @map("plate_number") @db.VarChar(30)
+
+  color String? @db.VarChar(30)
+
+  vehicleType VehicleType @default(car) @map("vehicle_type")
+
+  isActive Boolean @default(false) @map("is_active")
+
+  verificationStatus DocumentStatus @default(pending) @map("verification_status")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  rides     Ride[]
+  documents DriverDocument[]
+
+  @@index([driverId], map: "idx_vehicles_driver_id")
+  @@index([plateNumber], map: "idx_vehicles_plate_number")
+  @@map("vehicles")
+}
+
+//////////////////////////////////////////////////////
+// DRIVER DOCUMENTS
+//////////////////////////////////////////////////////
+
+model DriverDocument {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  driverId  String  @map("driver_id") @db.Uuid
+  vehicleId String? @map("vehicle_id") @db.Uuid
+
+  documentType DocumentType @map("document_type")
+
+  fileUrl String @map("file_url")
+
+  status DocumentStatus @default(pending)
+
+  rejectionReason String? @map("rejection_reason")
+
+  uploadedAt DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  @@index([driverId], map: "idx_driver_documents_driver_id")
+  @@index([status], map: "idx_driver_documents_status")
+  @@map("driver_documents")
+}
+
+//////////////////////////////////////////////////////
+// SAVED PLACES
+//////////////////////////////////////////////////////
+
+model SavedPlace {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  riderId String @map("rider_id") @db.Uuid
+
+  label String @db.VarChar(50)
+
+  placeType SavedPlaceType @map("place_type")
+
+  latitude  Decimal @db.Decimal(10, 7)
+  longitude Decimal @db.Decimal(10, 7)
+
+  address String?
+
+  provider String? @db.VarChar(30)
+
+  providerPlaceId String? @map("provider_place_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId], map: "idx_saved_places_rider_id")
+  @@index([placeType], map: "idx_saved_places_type")
+  @@map("saved_places")
+}
+
+//////////////////////////////////////////////////////
+// RIDES
+//////////////////////////////////////////////////////
+
+model Ride {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  riderId   String  @map("rider_id") @db.Uuid
+  driverId  String? @map("driver_id") @db.Uuid
+  vehicleId String? @map("vehicle_id") @db.Uuid
+
+  rideType RideType @default(standard) @map("ride_type")
+
+  scheduledPickupAt DateTime? @map("scheduled_pickup_at") @db.Timestamptz
+
+  recurrenceRule String? @map("recurrence_rule")
+
+  pickupLatitude        Decimal @map("pickup_latitude") @db.Decimal(10, 7)
+  pickupLongitude       Decimal @map("pickup_longitude") @db.Decimal(10, 7)
+  pickupAddress         String? @map("pickup_address")
+  pickupProviderPlaceId String? @map("pickup_provider_place_id")
+
+  dropoffLatitude        Decimal @map("dropoff_latitude") @db.Decimal(10, 7)
+  dropoffLongitude       Decimal @map("dropoff_longitude") @db.Decimal(10, 7)
+  dropoffAddress         String? @map("dropoff_address")
+  dropoffProviderPlaceId String? @map("dropoff_provider_place_id")
+
+  riderNoteToDriver String? @map("rider_note_to_driver")
+
+  status RideStatus @default(requested)
+
+  selectedRouteId String? @map("selected_route_id") @db.VarChar(100)
+
+  surgeZoneId String? @map("surge_zone_id") @db.VarChar(100)
+
+  cancelledByUserId String? @map("cancelled_by_user_id") @db.Uuid
+
+  cancellationReason String? @map("cancellation_reason")
+
+  requestedAt DateTime  @default(now()) @map("requested_at") @db.Timestamptz
+  acceptedAt  DateTime? @map("accepted_at") @db.Timestamptz
+  arrivedAt   DateTime? @map("arrived_at") @db.Timestamptz
+  startedAt   DateTime? @map("started_at") @db.Timestamptz
+  completedAt DateTime? @map("completed_at") @db.Timestamptz
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  rider   Rider    @relation(fields: [riderId], references: [id])
+  driver  Driver?  @relation(fields: [driverId], references: [id])
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
+
+  cancelledByUser User? @relation("CancelledByUser", fields: [cancelledByUserId], references: [id])
+
+  stops         RideStop[]
+  offers        RideOffer[]
+  fare          RideFare?
+  rating        Rating?
+  statusHistory RideStatusHistory[]
+
+  @@index([riderId], map: "idx_rides_rider_id")
+  @@index([driverId], map: "idx_rides_driver_id")
+  @@index([status], map: "idx_rides_status")
+  @@index([rideType], map: "idx_rides_ride_type")
+  @@index([scheduledPickupAt], map: "idx_rides_scheduled_pickup_at")
+  @@index([requestedAt], map: "idx_rides_requested_at")
+  @@map("rides")
+}
+
+//////////////////////////////////////////////////////
+// RIDE STOPS
+//////////////////////////////////////////////////////
+
+model RideStop {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  rideId String @map("ride_id") @db.Uuid
+
+  stopOrder Int @map("stop_order")
+
+  stopType StopType @map("stop_type")
+
+  latitude  Decimal @db.Decimal(10, 7)
+  longitude Decimal @db.Decimal(10, 7)
+
+  address String?
+
+  provider String? @db.VarChar(30)
+
+  providerPlaceId String? @map("provider_place_id")
+
+  arrivedAt  DateTime? @map("arrived_at") @db.Timestamptz
+  departedAt DateTime? @map("departed_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  @@unique([rideId, stopOrder])
+  @@index([rideId], map: "idx_ride_stops_ride_id")
+  @@index([rideId, stopOrder], map: "idx_ride_stops_order")
+  @@map("ride_stops")
+}
+
+//////////////////////////////////////////////////////
+// RIDE OFFERS
+//////////////////////////////////////////////////////
+
+model RideOffer {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  rideId   String @map("ride_id") @db.Uuid
+  driverId String @map("driver_id") @db.Uuid
+
+  status RideOfferStatus @default(sent)
+
+  distanceToPickupKm Decimal? @map("distance_to_pickup_km") @db.Decimal(8, 2)
+
+  driverRatingAtOffer Decimal? @map("driver_rating_at_offer") @db.Decimal(3, 2)
+
+  declineReason String? @map("decline_reason")
+
+  offeredAt   DateTime  @default(now()) @map("offered_at") @db.Timestamptz
+  respondedAt DateTime? @map("responded_at") @db.Timestamptz
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz
+
+  ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([rideId], map: "idx_ride_offers_ride_id")
+  @@index([driverId], map: "idx_ride_offers_driver_id")
+  @@index([status], map: "idx_ride_offers_status")
+  @@map("ride_offers")
+}
+
+//////////////////////////////////////////////////////
+// PRICING RULES
+//////////////////////////////////////////////////////
+
+model PricingRule {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  city String @default("default") @db.VarChar(100)
+
+  vehicleType VehicleType @default(car) @map("vehicle_type")
+
+  baseFare   Decimal @map("base_fare") @db.Decimal(10, 2)
+  perKmRate  Decimal @map("per_km_rate") @db.Decimal(10, 2)
+  perMinRate Decimal @map("per_min_rate") @db.Decimal(10, 2)
+
+  waitingPerMinRate Decimal @default(0) @map("waiting_per_min_rate") @db.Decimal(10, 2)
+
+  trafficDelayPerMinRate Decimal @default(0) @map("traffic_delay_per_min_rate") @db.Decimal(10, 2)
+
+  minimumFare Decimal @map("minimum_fare") @db.Decimal(10, 2)
+
+ peakStartTime DateTime? @map("peak_start_time") @db.Time(6)
+ peakEndTime DateTime? @map("peak_end_time") @db.Time(6)
+
+  peakMultiplier Decimal @default(1.00) @map("peak_multiplier") @db.Decimal(4, 2)
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  rideFares RideFare[]
+
+  @@index([city, vehicleType, isActive], map: "idx_pricing_rules_city_vehicle")
+  @@map("pricing_rules")
+}
+
+//////////////////////////////////////////////////////
+// RIDE FARES
+//////////////////////////////////////////////////////
+
+model RideFare {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  rideId String @unique @map("ride_id") @db.Uuid
+
+  pricingRuleId String? @map("pricing_rule_id") @db.Uuid
+
+  currency String @default("PKR") @db.VarChar(10)
+
+  estimatedDistanceKm      Decimal? @map("estimated_distance_km") @db.Decimal(8, 2)
+  estimatedDurationMin     Int?     @map("estimated_duration_min")
+  estimatedTrafficDelayMin Int?     @map("estimated_traffic_delay_min")
+
+  preRideMlPredictedFare Decimal? @map("pre_ride_ml_predicted_fare") @db.Decimal(10, 2)
+
+  preRideFormulaFare Decimal? @map("pre_ride_formula_fare") @db.Decimal(10, 2)
+
+  estimatedMinFare Decimal? @map("estimated_min_fare") @db.Decimal(10, 2)
+
+  estimatedMaxFare Decimal? @map("estimated_max_fare") @db.Decimal(10, 2)
+
+  actualDistanceKm Decimal? @map("actual_distance_km") @db.Decimal(8, 2)
+
+  actualDurationMin Int? @map("actual_duration_min")
+
+  actualTrafficDelayMin Int? @map("actual_traffic_delay_min")
+
+  waitingTimeMin Int @default(0) @map("waiting_time_min")
+
+  baseFare Decimal? @map("base_fare") @db.Decimal(10, 2)
+
+  perKmRate Decimal? @map("per_km_rate") @db.Decimal(10, 2)
+
+  perMinRate Decimal? @map("per_min_rate") @db.Decimal(10, 2)
+
+  waitingPerMinRate Decimal? @map("waiting_per_min_rate") @db.Decimal(10, 2)
+
+  trafficDelayPerMinRate Decimal? @map("traffic_delay_per_min_rate") @db.Decimal(10, 2)
+
+  peakMultiplier Decimal @default(1.00) @map("peak_multiplier") @db.Decimal(4, 2)
+
+  surgeMultiplier Decimal @default(1.00) @map("surge_multiplier") @db.Decimal(4, 2)
+
+  minimumFare Decimal? @map("minimum_fare") @db.Decimal(10, 2)
+
+  finalMlPredictedFare Decimal? @map("final_ml_predicted_fare") @db.Decimal(10, 2)
+
+  finalFormulaFare Decimal? @map("final_formula_fare") @db.Decimal(10, 2)
+
+  cancellationFee Decimal @default(0) @map("cancellation_fee") @db.Decimal(10, 2)
+
+  finalFare Decimal? @map("final_fare") @db.Decimal(10, 2)
+
+  farePolicy String @default("metered_after_ride") @map("fare_policy") @db.VarChar(30)
+
+  modelUsed String? @map("model_used") @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  finalizedAt DateTime? @map("finalized_at") @db.Timestamptz
+
+  ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  pricingRule PricingRule? @relation(fields: [pricingRuleId], references: [id])
+
+  @@index([rideId], map: "idx_ride_fares_ride_id")
+  @@index([pricingRuleId], map: "idx_ride_fares_pricing_rule_id")
+  @@map("ride_fares")
+}
+
+//////////////////////////////////////////////////////
+// ML MODELS
+//////////////////////////////////////////////////////
+
+model MlModel {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  modelName String @map("model_name") @db.VarChar(100)
+
+  modelType String @map("model_type") @db.VarChar(50)
+
+  algorithm String? @db.VarChar(100)
+
+  version String? @db.VarChar(50)
+
+  metrics Json?
+
+  artifactPath String? @map("artifact_path")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("ml_models")
+}
+
+//////////////////////////////////////////////////////
+// RATINGS
+//////////////////////////////////////////////////////
+
+model Rating {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  rideId String @unique @map("ride_id") @db.Uuid
+
+  riderId String @map("rider_id") @db.Uuid
+
+  driverId String @map("driver_id") @db.Uuid
+
+  rating Int
+
+  comment String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  rider Rider @relation(fields: [riderId], references: [id])
+
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([driverId], map: "idx_ratings_driver_id")
+  @@index([riderId], map: "idx_ratings_rider_id")
+  @@map("ratings")
+}
+
+//////////////////////////////////////////////////////
+// RIDE STATUS HISTORY
+//////////////////////////////////////////////////////
+
+model RideStatusHistory {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  rideId String @map("ride_id") @db.Uuid
+
+  oldStatus RideStatus? @map("old_status")
+
+  newStatus RideStatus @map("new_status")
+
+  changedAt DateTime @default(now()) @map("changed_at") @db.Timestamptz
+
+  changedByUserId String? @map("changed_by_user_id") @db.Uuid
+
+  ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  changedByUser User? @relation(fields: [changedByUserId], references: [id])
+
+  @@index([rideId], map: "idx_ride_status_history_ride_id")
+  @@map("ride_status_history")
+}
