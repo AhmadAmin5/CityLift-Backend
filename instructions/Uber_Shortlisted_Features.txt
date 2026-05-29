@@ -1,0 +1,62 @@
+Core Ride Features
+•	Request a ride (standard, scheduled, recurring)
+•	Real-time driver matching based on proximity and rating
+•	Live ride tracking on map with driver ETA
+•	Route display with turn-by-turn navigation (driver side)
+•	Multi-stop rides
+•	Ride cancellation with dynamic cancellation fee
+•	Ride notes to driver (e.g. "call me when arrived", "luggage assistance")
+
+
+Rider Features
+•	Rider registration and profile management
+•	Phone number + email verification (OTP)
+•	Profile photo upload
+•	Saved places: Home, Work, Favorites
+•	Rate and review driver after ride
+
+
+Driver Features
+•	Driver registration with document upload (CNIC, license, vehicle registration)
+•	Vehicle profile management (make, model, year, plate, color)
+•	Accept or decline ride requests
+•	Driver navigation with optimized route
+•	Earnings dashboard: daily, weekly, monthly breakdown
+•	Driver ratings and feedback review
+
+
+
+Payment & Wallet
+•	Ride receipt via email/SMS
+•	Surge pricing display before ride confirmation
+•	Fare estimator before booking
+
+
+
+ Maps & Location
+•	Real-time GPS tracking for riders and drivers
+•	Pickup point pin adjustment on map
+•	Nearby driver display on map pre-booking
+•	Driver's live location sharing during ride
+•	Location history for saved addresses
+•	Address autocomplete using Google Places / Mapbox
+•	ETA calculation with live traffic consideration
+•	Heatmap of demand zones (driver-facing)
+
+
+
+Ratings & Reviews
+•	Post-ride rating: rider rates driver (1–5 stars)
+
+
+Surge & Pricing Engine
+•	Dynamic surge multiplier based on supply-demand ratio
+•	Surge zone visualization on map
+•	Surge price shown before ride confirmation
+•	Pre ride estimate prediction using ML regression
+*	Post ride fare calculation using formula based on traffic, delay and other factors etc.
+•	Base fare + per km + per minute + surge calculation
+•	Peak hour pricing configuration (admin)
+•	Minimum fare enforcement
+
+

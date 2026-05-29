@@ -20,11 +20,13 @@ import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import riderRoutes from "./routes/rider.routes.js";
 import driverRoutes from "./routes/driver.routes.js";
+import mapsRoutes from "./routes/maps.routes.js";
 
 app.use(ApiVersion + "/auth", authRoutes);
 app.use(ApiVersion + "/users", userRoutes);
 app.use(ApiVersion + "/riders", riderRoutes);
 app.use(ApiVersion + "/drivers", driverRoutes);
+app.use(ApiVersion + "/maps", mapsRoutes);
 
 app.use(errorHandler);
 
