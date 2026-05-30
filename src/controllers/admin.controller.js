@@ -2,6 +2,7 @@ import { prisma } from "../db/postgres.js";
 
 import ApiError from "../utils/ApiError.js";
 import asyncHandler from "../utils/asyncHandler.js";
+import SurgeZone from "../models/surgeZone.model.js";
 
 /**
  * Convert a Prisma Time field to an "HH:MM:SS" string.
@@ -206,4 +207,188 @@ const updatePricingRule = asyncHandler(async (req, res) => {
     });
 });
 
-export { listPricingRules, createPricingRule, updatePricingRule };
+// ─── 16.4  PATCH /admin/driver-documents/:document_id/review ──────────
+
+const ALLOWED_DOC_STATUSES = ["approved", "rejected"];
+
+const formatDriverDocument = (doc) => ({
+    id: doc.id,
+    driver_id: doc.driverId,
+    vehicle_id: doc.vehicleId,
+    document_type: doc.documentType,
+    file_url: doc.fileUrl,
+    status: doc.status,
+    rejection_reason: doc.rejectionReason,
+    uploaded_at: doc.uploadedAt,
+    verified_at: doc.verifiedAt
+});
+
+const reviewDriverDocument = asyncHandler(async (req, res) => {
+
+    const { document_id } = req.params;
+    const { status, rejection_reason } = req.body;
+
+    if (!status) {
+        throw new ApiError(400, "status is required");
+    }
+
+    if (!ALLOWED_DOC_STATUSES.includes(status)) {
+        throw new ApiError(400, "Invalid status. Allowed: approved, rejected");
+    }
+
+    if (status === "rejected" && !rejection_reason) {
+        throw new ApiError(400, "rejection_reason is required when rejecting a document");
+    }
+
+    const existingDoc = await prisma.driverDocument.findUnique({
+        where: { id: document_id }
+    });
+
+    if (!existingDoc) {
+        throw new ApiError(404, "Driver document not found");
+    }
+
+    const updatedDoc = await prisma.driverDocument.update({
+        where: { id: document_id },
+        data: {
+            status,
+            rejectionReason: status === "rejected" ? rejection_reason : null,
+            verifiedAt: new Date()
+        }
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: "Driver document reviewed successfully",
+        data: {
+            document: formatDriverDocument(updatedDoc)
+        },
+        meta: null
+    });
+});
+
+// ─── 16.5  PATCH /admin/drivers/:driver_id/approval ───────────────────
+
+const ALLOWED_APPROVAL_STATUSES = ["pending", "approved", "rejected", "suspended"];
+
+const updateDriverApproval = asyncHandler(async (req, res) => {
+
+    const { driver_id } = req.params;
+    const { approval_status } = req.body;
+
+    if (!approval_status) {
+        throw new ApiError(400, "approval_status is required");
+    }
+
+    if (!ALLOWED_APPROVAL_STATUSES.includes(approval_status)) {
+        throw new ApiError(400, "Invalid approval_status. Allowed: pending, approved, rejected, suspended");
+    }
+
+    const existingDriver = await prisma.driver.findUnique({
+        where: { id: driver_id }
+    });
+
+    if (!existingDriver) {
+        throw new ApiError(404, "Driver not found");
+    }
+
+    const updatedDriver = await prisma.driver.update({
+        where: { id: driver_id },
+        data: {
+            approvalStatus: approval_status
+        }
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: "Driver approval status updated successfully",
+        data: {
+            driver: {
+                id: updatedDriver.id,
+                approval_status: updatedDriver.approvalStatus
+            }
+        },
+        meta: null
+    });
+});
+
+// ─── 16.6  POST /admin/surge-zones ────────────────────────────────────
+
+const upsertSurgeZone = asyncHandler(async (req, res) => {
+
+    const {
+        id,
+        city,
+        area_name,
+        center,
+        radius_km,
+        demand_count,
+        available_drivers,
+        surge_multiplier
+    } = req.body;
+
+    if (!id || !city || !area_name || !center || !center.latitude || !center.longitude || radius_km === undefined) {
+        throw new ApiError(400, "id, city, area_name, center (latitude, longitude), and radius_km are required");
+    }
+
+    const demandVal = demand_count ?? 0;
+    const driversVal = available_drivers ?? 0;
+    const supplyDemandRatio = demandVal > 0
+        ? parseFloat((driversVal / demandVal).toFixed(2))
+        : 0;
+
+    const surgeZone = await SurgeZone.findOneAndUpdate(
+        { zone_id: id },
+        {
+            $set: {
+                zone_id: id,
+                city,
+                area_name,
+                center: {
+                    latitude: center.latitude,
+                    longitude: center.longitude
+                },
+                radius_km,
+                demand_count: demandVal,
+                available_drivers: driversVal,
+                supply_demand_ratio: supplyDemandRatio,
+                surge_multiplier: surge_multiplier ?? 1.0,
+                updated_at: new Date()
+            }
+        },
+        { upsert: true, new: true }
+    );
+
+    return res.status(200).json({
+        success: true,
+        message: "Surge zone saved successfully",
+        data: {
+            surge_zone: {
+                id: surgeZone.zone_id,
+                city: surgeZone.city,
+                area_name: surgeZone.area_name,
+                center: {
+                    latitude: surgeZone.center.latitude,
+                    longitude: surgeZone.center.longitude
+                },
+                radius_km: surgeZone.radius_km,
+                demand_count: surgeZone.demand_count,
+                available_drivers: surgeZone.available_drivers,
+                supply_demand_ratio: surgeZone.supply_demand_ratio,
+                surge_multiplier: surgeZone.surge_multiplier,
+                updated_at: surgeZone.updated_at
+            }
+        },
+        meta: null
+    });
+});
+
+export {
+    listPricingRules,
+    createPricingRule,
+    updatePricingRule,
+    reviewDriverDocument,
+    updateDriverApproval,
+    upsertSurgeZone
+};
+

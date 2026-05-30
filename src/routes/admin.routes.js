@@ -5,7 +5,10 @@ import ApiError from "../utils/ApiError.js";
 import {
     listPricingRules,
     createPricingRule,
-    updatePricingRule
+    updatePricingRule,
+    reviewDriverDocument,
+    updateDriverApproval,
+    upsertSurgeZone
 } from "../controllers/admin.controller.js";
 
 const router = Router();
@@ -25,5 +28,10 @@ router.post("/pricing-rules", createPricingRule);
 
 router.patch("/pricing-rules/:pricing_rule_id", updatePricingRule);
 
-export default router;
+router.patch("/driver-documents/:document_id/review", reviewDriverDocument);
 
+router.patch("/drivers/:driver_id/approval", updateDriverApproval);
+
+router.post("/surge-zones", upsertSurgeZone);
+
+export default router;
