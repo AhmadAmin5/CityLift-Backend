@@ -3,7 +3,7 @@ import DriverLocation from "../models/driverLocation.model.js";
 import SurgeZone from "../models/surgeZone.model.js";
 import ApiError from "../utils/ApiError.js";
 import asyncHandler from "../utils/asyncHandler.js";
-import { reverseGeocode as mapboxReverseGeocode } from "../services/mapbox.service.js";
+import { reverseGeocodeWithGoogle } from "../services/googleGeocoding.service.js";
 
 import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
 import { googlePlacesAutocomplete, getGooglePlaceDetails } from "../services/googlePlaces.service.js";
@@ -172,7 +172,7 @@ const reverseGeocode = asyncHandler(async (req, res) => {
     const lat = Number(latitude);
     const lon = Number(longitude);
 
-    let data = await mapboxReverseGeocode(lat, lon);
+    let data = await reverseGeocodeWithGoogle(lat, lon);
 
     // Fallback to closest predefined place or generate a dynamic one
     if (!data) {

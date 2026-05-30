@@ -28,10 +28,20 @@ const reverseGeocode = async (latitude, longitude) => {
         return {
             provider: "mapbox",
             provider_place_id: feature.id,
-            name: feature.text || feature.place_name?.split(",")[0] || "",
-            address: feature.place_name || "",
-            latitude: feature.geometry.coordinates[1],
-            longitude: feature.geometry.coordinates[0]
+            name: feature.text || feature.place_name?.split(",")[0] || "Selected Location",
+            address:
+                feature.place_name ||
+                `Lat: ${Number(latitude).toFixed(6)}, Lng: ${Number(longitude).toFixed(6)}`,
+
+            // Important:
+            // Keep the exact pin coordinates from the user's click.
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+
+            reverse_geocoded_latitude: feature.geometry?.coordinates?.[1] ?? null,
+            reverse_geocoded_longitude: feature.geometry?.coordinates?.[0] ?? null,
+            place_type: feature.place_type || [],
+            is_manual_pin: true
         };
     } catch (error) {
         logger.error(`Error in Mapbox reverseGeocode: ${error.message}`);
