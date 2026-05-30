@@ -10,6 +10,7 @@ import ApiError from "../utils/ApiError.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import logger from "../utils/logger.js";
 import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
+import * as rideEstimateService from "../services/rideEstimate.service.js";
 
 const DEFAULT_CURRENCY = "PKR";
 const DEFAULT_CITY = "Lahore";
@@ -318,7 +319,7 @@ const getNearbyDriversCount = async (pickup) => {
     return 4;
 };
 
-const estimateRideFare = asyncHandler(async (req, res) => {
+const estimateRideFare = asyncHandler(async (req, res, next) => {
     if (!req.user) {
         throw new ApiError(401, "Unauthorized request");
     }
@@ -327,114 +328,12 @@ const estimateRideFare = asyncHandler(async (req, res) => {
         throw new ApiError(403, "Access denied. Rider account required");
     }
 
-    const {
-        ride_type,
-        scheduled_pickup_at,
-        recurrence_rule,
-        vehicle_type = "car",
-        pickup,
-        dropoff,
-        stops = []
-    } = req.body || {};
-
-    if (!pickup || !dropoff) {
-        throw new ApiError(400, "Pickup and dropoff are required");
-    }
-
-    const allowedRideTypes = ["standard", "scheduled", "recurring"];
-    if (ride_type && !allowedRideTypes.includes(ride_type)) {
-        throw new ApiError(400, "Invalid ride type");
-    }
-
-    const allowedVehicleTypes = ["car", "bike", "rickshaw"];
-    if (!allowedVehicleTypes.includes(String(vehicle_type).toLowerCase())) {
-        throw new ApiError(400, "Invalid vehicle type");
-    }
-
-    const normalizedPickup = validateCoordinate(pickup, "Pickup");
-    const normalizedDropoff = validateCoordinate(dropoff, "Dropoff");
-    const normalizedStops = normalizeStops(stops);
-
-    if (scheduled_pickup_at && Number.isNaN(new Date(scheduled_pickup_at).getTime())) {
-        throw new ApiError(400, "scheduled_pickup_at must be a valid date-time string");
-    }
-
-    const routePreview =
-        (await getGoogleRouteDirections(
-            normalizedPickup,
-            normalizedDropoff,
-            normalizedStops,
-            vehicle_type
-        )) || estimateFallbackRoute(normalizedPickup, normalizedDropoff, normalizedStops, vehicle_type);
-
-    const pricingRule = await getPricingRuleOrDefaults(vehicle_type, DEFAULT_CITY);
-    const surgeContext = await getSurgeContext(normalizedPickup, DEFAULT_CITY);
-    const peakMultiplier = getPeakMultiplier(pricingRule, scheduled_pickup_at, recurrence_rule);
-    const nearbyDriversCount = await getNearbyDriversCount(normalizedPickup);
-
-    const estimatedDistanceKm = toNumber(routePreview.distance_km, 0);
-    const estimatedDurationMin = toNumber(routePreview.traffic_duration_min, 0);
-    const estimatedTrafficDelayMin = toNumber(routePreview.traffic_delay_min, 0);
-
-    const rawFormulaFare =
-        pricingRule.baseFare +
-        estimatedDistanceKm * pricingRule.perKmRate +
-        estimatedDurationMin * pricingRule.perMinRate +
-        estimatedTrafficDelayMin * pricingRule.trafficDelayPerMinRate;
-
-    const preRideFormulaFare = Math.max(
-        pricingRule.minimumFare,
-        Math.round(rawFormulaFare * peakMultiplier * surgeContext.surgeMultiplier * 0.8)
-    );
-
-    const preRideMlPredictedFare = Math.max(
-        pricingRule.minimumFare,
-        Math.round(preRideFormulaFare + estimatedDistanceKm * 0.6 + estimatedTrafficDelayMin * 0.5)
-    );
-
-    const estimatedMinFare = Math.max(pricingRule.minimumFare, Math.round(preRideFormulaFare * 0.89));
-
-    const estimatedMaxFare = Math.max(estimatedMinFare, Math.round(preRideFormulaFare * 1.08));
+    const result = await rideEstimateService.estimateRideFare(req.user, req.body);
 
     return res.status(200).json({
         success: true,
         message: "Ride fare estimated successfully",
-        data: {
-            fare_estimate: {
-                currency: DEFAULT_CURRENCY,
-                estimated_distance_km: Number(estimatedDistanceKm.toFixed(2)),
-                estimated_duration_min: Math.round(estimatedDurationMin),
-                estimated_traffic_delay_min: Math.round(estimatedTrafficDelayMin),
-                base_fare: Math.round(pricingRule.baseFare),
-                per_km_rate: Math.round(pricingRule.perKmRate),
-                per_min_rate: Math.round(pricingRule.perMinRate),
-                waiting_per_min_rate: Math.round(pricingRule.waitingPerMinRate),
-                traffic_delay_per_min_rate: Math.round(pricingRule.trafficDelayPerMinRate),
-                minimum_fare: Math.round(pricingRule.minimumFare),
-                peak_multiplier: Number(peakMultiplier.toFixed(2)),
-                surge_multiplier: Number(surgeContext.surgeMultiplier.toFixed(2)),
-                surge_zone_id: surgeContext.surgeZoneId,
-                pre_ride_formula_fare: preRideFormulaFare,
-                pre_ride_ml_predicted_fare: preRideMlPredictedFare,
-                estimated_min_fare: estimatedMinFare,
-                estimated_max_fare: estimatedMaxFare,
-                model_used: "fare_prediction_linear_regression_v1_mock"
-            },
-            route: {
-                route_id: routePreview.route_id,
-                ride_id: null,
-                route_type: routePreview.route_type,
-                provider: routePreview.provider,
-                selected: true,
-                distance_km: Number(routePreview.distance_km.toFixed(2)),
-                normal_duration_min: Math.round(routePreview.normal_duration_min),
-                traffic_duration_min: Math.round(routePreview.traffic_duration_min),
-                traffic_delay_min: Math.round(routePreview.traffic_delay_min),
-                polyline: routePreview.polyline,
-                steps: routePreview.steps || []
-            },
-            nearby_drivers_count: nearbyDriversCount
-        },
+        data: result,
         meta: null
     });
 });
@@ -727,6 +626,15 @@ const formatRideResponse = ({ ride, requestBody, routeId }) => {
             created_at: stop.createdAt
         }));
 
+    const pickupStop = (ride.stops || []).find(
+        (s) => s.stopType === "pickup" || s.stopOrder === 1
+    );
+    const dropoffStop = (ride.stops || []).find(
+        (s) =>
+            s.stopType === "dropoff" ||
+            s.stopOrder === Math.max(1, ...(ride.stops || []).map((st) => st.stopOrder))
+    );
+
     return {
         id: ride.id,
         rider_id: ride.riderId,
@@ -738,20 +646,20 @@ const formatRideResponse = ({ ride, requestBody, routeId }) => {
         pickup: {
             latitude: Number(ride.pickupLatitude),
             longitude: Number(ride.pickupLongitude),
-            address: requestBody.pickup?.address || ride.pickupAddress || null,
-            provider: requestBody.pickup?.provider || null,
-            provider_place_id: requestBody.pickup?.provider_place_id || ride.pickupProviderPlaceId || null
+            address: ride.pickupAddress || pickupStop?.address || null,
+            provider: pickupStop?.provider || requestBody?.pickup?.provider || null,
+            provider_place_id: ride.pickupProviderPlaceId || pickupStop?.providerPlaceId || requestBody?.pickup?.provider_place_id || null
         },
         dropoff: {
             latitude: Number(ride.dropoffLatitude),
             longitude: Number(ride.dropoffLongitude),
-            address: requestBody.dropoff?.address || ride.dropoffAddress || null,
-            provider: requestBody.dropoff?.provider || null,
-            provider_place_id: requestBody.dropoff?.provider_place_id || ride.dropoffProviderPlaceId || null
+            address: ride.dropoffAddress || dropoffStop?.address || null,
+            provider: dropoffStop?.provider || requestBody?.dropoff?.provider || null,
+            provider_place_id: ride.dropoffProviderPlaceId || dropoffStop?.providerPlaceId || requestBody?.dropoff?.provider_place_id || null
         },
         rider_note_to_driver: ride.riderNoteToDriver,
         status: ride.status,
-        selected_route_id: routeId,
+        selected_route_id: routeId || ride.selectedRouteId,
         surge_zone_id: ride.surgeZoneId,
         cancelled_by_user_id: ride.cancelledByUserId,
         cancellation_reason: ride.cancellationReason,
@@ -790,8 +698,79 @@ const formatRideResponse = ({ ride, requestBody, routeId }) => {
                   model_used: ride.fare.modelUsed
               }
             : null,
-        driver: null,
-        vehicle: null
+        driver: ride.driver
+            ? {
+                  id: ride.driver.id,
+                  name: ride.driver.user?.name || null,
+                  phone: ride.driver.user?.phone || null,
+                  average_rating: Number(ride.driver.averageRating),
+                  profile_photo_url: ride.driver.user?.profilePhotoUrl || null
+              }
+            : null,
+        vehicle: ride.vehicle
+            ? {
+                  id: ride.vehicle.id,
+                  make: ride.vehicle.make,
+                  model: ride.vehicle.model,
+                  plate_number: ride.vehicle.plateNumber,
+                  color: ride.vehicle.color,
+                  vehicle_type: ride.vehicle.vehicleType
+              }
+            : null
+    };
+};
+
+const formatListRideResponse = (ride) => {
+    return {
+        id: ride.id,
+        rider_id: ride.riderId,
+        driver_id: ride.driverId,
+        vehicle_id: ride.vehicleId,
+        ride_type: ride.rideType,
+        scheduled_pickup_at: ride.scheduledPickupAt,
+        recurrence_rule: ride.recurrenceRule,
+        pickup: {
+            latitude: Number(ride.pickupLatitude),
+            longitude: Number(ride.pickupLongitude),
+            address: ride.pickupAddress || null
+        },
+        dropoff: {
+            latitude: Number(ride.dropoffLatitude),
+            longitude: Number(ride.dropoffLongitude),
+            address: ride.dropoffAddress || null
+        },
+        rider_note_to_driver: ride.riderNoteToDriver,
+        status: ride.status,
+        selected_route_id: ride.selectedRouteId,
+        surge_zone_id: ride.surgeZoneId,
+        requested_at: ride.requestedAt,
+        completed_at: ride.completedAt,
+        fare: ride.fare
+            ? {
+                  currency: ride.fare.currency,
+                  final_fare: ride.fare.finalFare === null ? null : Number(ride.fare.finalFare),
+                  estimated_min_fare: ride.fare.estimatedMinFare === null ? null : Number(ride.fare.estimatedMinFare),
+                  estimated_max_fare: ride.fare.estimatedMaxFare === null ? null : Number(ride.fare.estimatedMaxFare)
+              }
+            : null,
+        driver: ride.driver
+            ? {
+                  id: ride.driver.id,
+                  name: ride.driver.user?.name || null,
+                  average_rating: Number(ride.driver.averageRating),
+                  profile_photo_url: ride.driver.user?.profilePhotoUrl || null
+              }
+            : null,
+        vehicle: ride.vehicle
+            ? {
+                  id: ride.vehicle.id,
+                  make: ride.vehicle.make,
+                  model: ride.vehicle.model,
+                  plate_number: ride.vehicle.plateNumber,
+                  color: ride.vehicle.color,
+                  vehicle_type: ride.vehicle.vehicleType
+              }
+            : null
     };
 };
 
@@ -1052,4 +1031,1238 @@ const createRideRequest = asyncHandler(async (req, res) => {
     });
 });
 
-export { estimateRideFare, createRideRequest };
+const listMyRides = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { status, ride_type, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.max(1, parseInt(limit) || 20);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Filter by role
+    let profileId = null;
+    const whereClause = {};
+
+    if (req.user.role === "rider") {
+        profileId = req.user.riderProfile?.id || req.user.rider_profile?.id;
+        if (!profileId) {
+            throw new ApiError(404, "Rider profile not found");
+        }
+        whereClause.riderId = profileId;
+    } else if (req.user.role === "driver") {
+        profileId = req.user.driverProfile?.id || req.user.driver_profile?.id;
+        if (!profileId) {
+            throw new ApiError(404, "Driver profile not found");
+        }
+        whereClause.driverId = profileId;
+    } else {
+        throw new ApiError(403, "Access denied. Rider or Driver account required");
+    }
+
+    if (status) {
+        whereClause.status = status;
+    }
+    if (ride_type) {
+        whereClause.rideType = ride_type;
+    }
+
+    const [total, rides] = await Promise.all([
+        prisma.ride.count({ where: whereClause }),
+        prisma.ride.findMany({
+            where: whereClause,
+            include: {
+                stops: true,
+                fare: true,
+                driver: {
+                    include: {
+                        user: true
+                    }
+                },
+                vehicle: true
+            },
+            orderBy: {
+                createdAt: "desc"
+            },
+            skip,
+            take: limitNum
+        })
+    ]);
+
+    const totalPages = Math.ceil(total / limitNum);
+
+    return res.status(200).json({
+        success: true,
+        message: "Rides fetched successfully",
+        data: rides.map(formatListRideResponse),
+        meta: {
+            page: pageNum,
+            limit: limitNum,
+            total,
+            total_pages: totalPages
+        }
+    });
+});
+
+const getRideDetails = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { ride_id } = req.params;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id },
+        include: {
+            stops: true,
+            fare: true,
+            driver: {
+                include: {
+                    user: true
+                }
+            },
+            vehicle: true
+        }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (req.user.role === "rider") {
+        const riderId = req.user.riderProfile?.id || req.user.rider_profile?.id;
+        if (ride.riderId !== riderId) {
+            throw new ApiError(403, "Access denied");
+        }
+    } else if (req.user.role === "driver") {
+        const driverId = req.user.driverProfile?.id || req.user.driver_profile?.id;
+        if (ride.driverId && ride.driverId !== driverId) {
+            throw new ApiError(403, "Access denied");
+        }
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride fetched successfully",
+        data: {
+            ride: formatRideResponse({ ride })
+        },
+        meta: null
+    });
+});
+
+const getRideRoute = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { ride_id } = req.params;
+    const route_type = req.query.route_type || "pickup_to_dropoff";
+
+    const rideExists = await prisma.ride.findUnique({
+        where: { id: ride_id }
+    });
+    if (!rideExists) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+        throw new ApiError(500, "Database connection not available");
+    }
+
+    const collection = mongoose.connection.collection("ride_routes");
+    const route = await collection.findOne({ ride_id, route_type });
+
+    if (!route) {
+        throw new ApiError(404, "Ride route not found");
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride route fetched successfully",
+        data: {
+            route: {
+                route_id: route.route_id || route._id?.toString(),
+                ride_id: route.ride_id,
+                route_type: route.route_type,
+                provider: route.provider,
+                selected: route.selected ?? true,
+                distance_km: Number(route.distance_km),
+                normal_duration_min: Math.round(route.normal_duration_min),
+                traffic_duration_min: Math.round(route.traffic_duration_min),
+                traffic_delay_min: Math.round(route.traffic_delay_min),
+                polyline: route.polyline,
+                steps: route.steps || []
+            }
+        },
+        meta: null
+    });
+});
+
+const getRideLiveState = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { ride_id } = req.params;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id },
+        include: { fare: true }
+    });
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+        throw new ApiError(500, "Database connection not available");
+    }
+
+    const collection = mongoose.connection.collection("ride_live_state");
+    const liveStateDoc = await collection.findOne({ ride_id });
+
+    let live_state;
+    if (liveStateDoc) {
+        live_state = {
+            ride_id: liveStateDoc.ride_id,
+            rider_id: liveStateDoc.rider_id,
+            driver_id: liveStateDoc.driver_id,
+            status: liveStateDoc.status,
+            current_location: {
+                latitude: liveStateDoc.current_location?.coordinates?.[1] ?? liveStateDoc.current_location?.latitude ?? Number(ride.pickupLatitude),
+                longitude: liveStateDoc.current_location?.coordinates?.[0] ?? liveStateDoc.current_location?.longitude ?? Number(ride.pickupLongitude)
+            },
+            current_route_id: liveStateDoc.current_route_id || ride.selectedRouteId,
+            eta_min: liveStateDoc.eta_min ?? Math.round(ride.fare?.estimatedDurationMin || 0),
+            distance_remaining_km: liveStateDoc.distance_remaining_km ?? Number(ride.fare?.estimatedDistanceKm || 0),
+            updated_at: liveStateDoc.updated_at || liveStateDoc.updatedAt || new Date()
+        };
+    } else {
+        live_state = {
+            ride_id: ride.id,
+            rider_id: ride.riderId,
+            driver_id: ride.driverId,
+            status: ride.status,
+            current_location: {
+                latitude: Number(ride.pickupLatitude),
+                longitude: Number(ride.pickupLongitude)
+            },
+            current_route_id: ride.selectedRouteId,
+            eta_min: Math.round(ride.fare?.estimatedDurationMin || 0),
+            distance_remaining_km: Number(ride.fare?.estimatedDistanceKm || 0),
+            updated_at: ride.updatedAt
+        };
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride live state fetched successfully",
+        data: {
+            live_state
+        },
+        meta: null
+    });
+});
+
+const cancelRide = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { ride_id } = req.params;
+    const { reason = "" } = req.body;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id },
+        include: { fare: true }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (ride.status === "completed" || ride.status === "cancelled") {
+        throw new ApiError(409, `Cannot cancel ride in status: ${ride.status}`);
+    }
+
+    let isRider = false;
+    let isDriver = false;
+
+    if (req.user.role === "rider") {
+        const riderId = req.user.riderProfile?.id || req.user.rider_profile?.id;
+        if (ride.riderId === riderId) {
+            isRider = true;
+        }
+    } else if (req.user.role === "driver") {
+        const driverId = req.user.driverProfile?.id || req.user.driver_profile?.id;
+        if (ride.driverId === driverId) {
+            isDriver = true;
+        }
+    }
+
+    if (!isRider && !isDriver) {
+        throw new ApiError(403, "Access denied");
+    }
+
+    let cancellationFee = 0;
+    let feeCharged = false;
+    let rule = "driver_cancelled";
+
+    if (isRider) {
+        if (ride.driverId) {
+            cancellationFee = 100;
+            feeCharged = true;
+            rule = "rider_cancelled_after_driver_accept";
+        } else {
+            cancellationFee = 0;
+            feeCharged = false;
+            rule = "rider_cancelled_before_driver_accept";
+        }
+    }
+
+    const updatedRide = await prisma.$transaction(async (tx) => {
+        const updated = await tx.ride.update({
+            where: { id: ride.id },
+            data: {
+                status: "cancelled",
+                cancelledByUserId: req.user.id,
+                cancellationReason: reason,
+                cancelledAt: new Date()
+            },
+            include: {
+                stops: true,
+                fare: true
+            }
+        });
+
+        if (updated.fare) {
+            await tx.rideFare.update({
+                where: { id: updated.fare.id },
+                data: {
+                    cancellationFee,
+                    finalFare: cancellationFee,
+                    finalizedAt: new Date()
+                }
+            });
+            updated.fare.cancellationFee = cancellationFee;
+            updated.fare.finalFare = cancellationFee;
+        }
+
+        await tx.rideStatusHistory.create({
+            data: {
+                rideId: ride.id,
+                oldStatus: ride.status,
+                newStatus: "cancelled",
+                changedByUserId: req.user.id
+            }
+        });
+
+        if (ride.driverId) {
+            await tx.driver.update({
+                where: { id: ride.driverId },
+                data: { isAvailable: true }
+            });
+        }
+
+        return updated;
+    });
+
+    Promise.allSettled([
+        (async () => {
+            if (mongoose.connection.readyState === 1) {
+                await mongoose.connection.collection("ride_live_state").deleteOne({ ride_id: ride.id });
+                if (ride.driverId) {
+                    await DriverLocation.updateOne(
+                        { driver_id: ride.driverId },
+                        { $set: { is_available: true, updated_at: new Date() } }
+                    );
+                }
+            }
+        })(),
+        (async () => {
+            if (neo4jDriver) {
+                const session = neo4jDriver.session();
+                try {
+                    await session.run(
+                        `
+                        MATCH (r:Ride {id: $rideId})
+                        SET r.status = "cancelled", r.cancellation_fee = $cancellationFee
+                        `,
+                        { rideId: ride.id, cancellationFee }
+                    );
+                } finally {
+                    await session.close();
+                }
+            }
+        })()
+    ]).catch((err) => {
+        logger.warn(`Side-effects after cancellation failed: ${err.message}`);
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride cancelled successfully",
+        data: {
+            ride: {
+                id: updatedRide.id,
+                status: updatedRide.status,
+                cancelled_by_user_id: updatedRide.cancelledByUserId,
+                cancellation_reason: updatedRide.cancellationReason,
+                cancelled_at: updatedRide.cancelledAt
+            },
+            cancellation: {
+                currency: "PKR",
+                cancellation_fee: cancellationFee,
+                fee_charged: feeCharged,
+                rule
+            }
+        },
+        meta: null
+    });
+});
+
+const driverArrived = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    if (req.user.role !== "driver") {
+        throw new ApiError(403, "Access denied. Driver account required");
+    }
+
+    const { ride_id } = req.params;
+    const driverId = req.user.driverProfile?.id || req.user.driver_profile?.id;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (ride.driverId !== driverId) {
+        throw new ApiError(403, "Access denied. You are not assigned to this ride");
+    }
+
+    if (ride.status !== "accepted" && ride.status !== "driver_assigned") {
+        throw new ApiError(409, `Cannot transition to arrived from status: ${ride.status}`);
+    }
+
+    const arrivedAt = new Date();
+    const updatedRide = await prisma.$transaction(async (tx) => {
+        const updated = await tx.ride.update({
+            where: { id: ride.id },
+            data: {
+                status: "arrived",
+                arrivedAt
+            }
+        });
+
+        await tx.rideStatusHistory.create({
+            data: {
+                rideId: ride.id,
+                oldStatus: ride.status,
+                newStatus: "arrived",
+                changedByUserId: req.user.id
+            }
+        });
+
+        await tx.rideStop.updateMany({
+            where: {
+                rideId: ride.id,
+                stopType: "pickup"
+            },
+            data: {
+                arrivedAt
+            }
+        });
+
+        return updated;
+    });
+
+    if (mongoose.connection.readyState === 1) {
+        await mongoose.connection.collection("ride_live_state").updateOne(
+            { ride_id: ride.id },
+            {
+                $set: {
+                    status: "arrived",
+                    updated_at: new Date()
+                }
+            },
+            { upsert: true }
+        );
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: "Driver marked as arrived",
+        data: {
+            ride: {
+                id: updatedRide.id,
+                status: updatedRide.status,
+                arrived_at: updatedRide.arrivedAt
+            }
+        },
+        meta: null
+    });
+});
+
+const driverStartRide = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    if (req.user.role !== "driver") {
+        throw new ApiError(403, "Access denied. Driver account required");
+    }
+
+    const { ride_id } = req.params;
+    const driverId = req.user.driverProfile?.id || req.user.driver_profile?.id;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id },
+        include: { fare: true }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (ride.driverId !== driverId) {
+        throw new ApiError(403, "Access denied. You are not assigned to this ride");
+    }
+
+    const allowedStatuses = ["accepted", "driver_assigned", "arrived"];
+    if (!allowedStatuses.includes(ride.status)) {
+        throw new ApiError(409, `Cannot start ride from status: ${ride.status}`);
+    }
+
+    const startedAt = new Date();
+    const updatedRide = await prisma.$transaction(async (tx) => {
+        const updated = await tx.ride.update({
+            where: { id: ride.id },
+            data: {
+                status: "started",
+                startedAt
+            }
+        });
+
+        await tx.rideStatusHistory.create({
+            data: {
+                rideId: ride.id,
+                oldStatus: ride.status,
+                newStatus: "started",
+                changedByUserId: req.user.id
+            }
+        });
+
+        await tx.rideStop.updateMany({
+            where: {
+                rideId: ride.id,
+                stopType: "pickup"
+            },
+            data: {
+                departedAt: startedAt
+            }
+        });
+
+        return updated;
+    });
+
+    let liveState = {};
+    if (mongoose.connection.readyState === 1) {
+        const collection = mongoose.connection.collection("ride_live_state");
+        const doc = {
+            ride_id: ride.id,
+            rider_id: ride.riderId,
+            driver_id: ride.driverId,
+            status: "started",
+            current_location: {
+                type: "Point",
+                coordinates: [Number(ride.pickupLongitude), Number(ride.pickupLatitude)]
+            },
+            current_route_id: ride.selectedRouteId,
+            eta_min: Math.round(ride.fare?.estimatedDurationMin || 22),
+            distance_remaining_km: Number(ride.fare?.estimatedDistanceKm || 12.4),
+            updated_at: startedAt
+        };
+
+        await collection.updateOne(
+            { ride_id: ride.id },
+            { $set: doc },
+            { upsert: true }
+        );
+
+        liveState = {
+            ride_id: doc.ride_id,
+            rider_id: doc.rider_id,
+            driver_id: doc.driver_id,
+            status: doc.status,
+            current_location: {
+                latitude: doc.current_location.coordinates[1],
+                longitude: doc.current_location.coordinates[0]
+            },
+            current_route_id: doc.current_route_id,
+            eta_min: doc.eta_min,
+            distance_remaining_km: doc.distance_remaining_km,
+            updated_at: doc.updated_at
+        };
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride started successfully",
+        data: {
+            ride: {
+                id: updatedRide.id,
+                status: updatedRide.status,
+                started_at: updatedRide.startedAt
+            },
+            live_state: liveState
+        },
+        meta: null
+    });
+});
+
+const submitTrackingPoint = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    if (req.user.role !== "driver") {
+        throw new ApiError(403, "Access denied. Driver account required");
+    }
+
+    const { ride_id } = req.params;
+    const {
+        latitude,
+        longitude,
+        speed_kmph = 0,
+        heading = 0,
+        traffic_level = "unknown",
+        eta_min,
+        distance_remaining_km
+    } = req.body || {};
+
+    if (latitude === undefined || longitude === undefined) {
+        throw new ApiError(400, "latitude and longitude are required");
+    }
+
+    const driverId = req.user.driverProfile?.id || req.user.driver_profile?.id;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (ride.driverId !== driverId) {
+        throw new ApiError(403, "Access denied. You are not assigned to this ride");
+    }
+
+    if (ride.status !== "started") {
+        throw new ApiError(422, "Cannot submit tracking point for non-started ride");
+    }
+
+    const timestamp = new Date();
+
+    if (mongoose.connection.readyState !== 1) {
+        throw new ApiError(500, "Database connection not available");
+    }
+
+    const trackingCollection = mongoose.connection.collection("ride_tracking");
+    const trackingPoint = {
+        ride_id: ride.id,
+        driver_id: driverId,
+        location: {
+            type: "Point",
+            coordinates: [Number(longitude), Number(latitude)]
+        },
+        speed_kmph: Number(speed_kmph),
+        heading: Number(heading),
+        traffic_level,
+        timestamp
+    };
+    await trackingCollection.insertOne(trackingPoint);
+
+    const liveStateCollection = mongoose.connection.collection("ride_live_state");
+    const liveStateUpdate = {
+        ride_id: ride.id,
+        rider_id: ride.riderId,
+        driver_id: driverId,
+        status: ride.status,
+        current_location: {
+            type: "Point",
+            coordinates: [Number(longitude), Number(latitude)]
+        },
+        current_route_id: ride.selectedRouteId,
+        eta_min: eta_min !== undefined ? Math.round(Number(eta_min)) : null,
+        distance_remaining_km: distance_remaining_km !== undefined ? Number(Number(distance_remaining_km).toFixed(2)) : null,
+        updated_at: timestamp
+    };
+    await liveStateCollection.updateOne(
+        { ride_id: ride.id },
+        { $set: liveStateUpdate },
+        { upsert: true }
+    );
+
+    await DriverLocation.updateOne(
+        { driver_id: driverId },
+        {
+            $set: {
+                location: {
+                    type: "Point",
+                    coordinates: [Number(longitude), Number(latitude)]
+                },
+                heading: Number(heading),
+                speed_kmph: Number(speed_kmph),
+                updated_at: timestamp
+            }
+        },
+        { upsert: true }
+    );
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride tracking updated successfully",
+        data: {
+            tracking_point: {
+                ride_id: ride.id,
+                driver_id: driverId,
+                latitude: Number(latitude),
+                longitude: Number(longitude),
+                speed_kmph: Number(speed_kmph),
+                heading: Number(heading),
+                traffic_level,
+                timestamp
+            },
+            live_state: {
+                ride_id: ride.id,
+                rider_id: ride.riderId,
+                driver_id: driverId,
+                status: ride.status,
+                current_location: {
+                    latitude: Number(latitude),
+                    longitude: Number(longitude)
+                },
+                current_route_id: ride.selectedRouteId,
+                eta_min: liveStateUpdate.eta_min,
+                distance_remaining_km: liveStateUpdate.distance_remaining_km,
+                updated_at: timestamp
+            }
+        },
+        meta: null
+    });
+});
+
+const getTrackingHistory = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { ride_id } = req.params;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id }
+    });
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+        throw new ApiError(500, "Database connection not available");
+    }
+
+    const collection = mongoose.connection.collection("ride_tracking");
+    const points = await collection
+        .find({ ride_id: ride.id })
+        .sort({ timestamp: 1 })
+        .toArray();
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride tracking history fetched successfully",
+        data: points.map((p) => ({
+            ride_id: p.ride_id,
+            driver_id: p.driver_id,
+            latitude: p.location?.coordinates?.[1] ?? p.latitude,
+            longitude: p.location?.coordinates?.[0] ?? p.longitude,
+            speed_kmph: Number(p.speed_kmph || 0),
+            heading: Number(p.heading || 0),
+            traffic_level: p.traffic_level || "unknown",
+            timestamp: p.timestamp
+        })),
+        meta: null
+    });
+});
+
+const completeRide = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    if (req.user.role !== "driver") {
+        throw new ApiError(403, "Access denied. Driver account required");
+    }
+
+    const { ride_id } = req.params;
+    const {
+        actual_distance_km,
+        actual_duration_min,
+        actual_traffic_delay_min = 0,
+        waiting_time_min = 0,
+        route_changed = false
+    } = req.body || {};
+
+    if (actual_distance_km === undefined || actual_duration_min === undefined) {
+        throw new ApiError(400, "actual_distance_km and actual_duration_min are required");
+    }
+
+    const driverId = req.user.driverProfile?.id || req.user.driver_profile?.id;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id },
+        include: { fare: true }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (ride.driverId !== driverId) {
+        throw new ApiError(403, "Access denied. You are not assigned to this ride");
+    }
+
+    const allowedStatuses = ["accepted", "driver_assigned", "arrived", "started"];
+    if (!allowedStatuses.includes(ride.status)) {
+        throw new ApiError(409, `Cannot complete ride from status: ${ride.status}`);
+    }
+
+    const baseFare = Number(ride.fare?.baseFare || 100);
+    const perKmRate = Number(ride.fare?.perKmRate || 40);
+    const perMinRate = Number(ride.fare?.perMinRate || 8);
+    const waitingPerMinRate = Number(ride.fare?.waitingPerMinRate || 5);
+    const trafficDelayPerMinRate = Number(ride.fare?.trafficDelayPerMinRate || 4);
+    const surgeMultiplier = Number(ride.fare?.surgeMultiplier || 1.0);
+    const minimumFare = Number(ride.fare?.minimumFare || 250);
+
+    const finalFormulaFare = Math.round(
+        Math.max(
+            minimumFare,
+            (baseFare +
+                Number(actual_distance_km) * perKmRate +
+                Number(actual_duration_min) * perMinRate +
+                Number(waiting_time_min) * waitingPerMinRate +
+                Number(actual_traffic_delay_min) * trafficDelayPerMinRate) *
+                surgeMultiplier
+        )
+    );
+
+    const finalMlPredictedFare = Math.max(
+        minimumFare,
+        Math.round(finalFormulaFare - 18)
+    );
+
+    const completedAt = new Date();
+
+    const updatedRide = await prisma.$transaction(async (tx) => {
+        const updated = await tx.ride.update({
+            where: { id: ride.id },
+            data: {
+                status: "completed",
+                completedAt
+            }
+        });
+
+        if (ride.fare) {
+            await tx.rideFare.update({
+                where: { id: ride.fare.id },
+                data: {
+                    actualDistanceKm: Number(actual_distance_km),
+                    actualDurationMin: Number(actual_duration_min),
+                    actualTrafficDelayMin: Number(actual_traffic_delay_min),
+                    waitingTimeMin: Number(waiting_time_min),
+                    finalFormulaFare,
+                    finalMlPredictedFare,
+                    finalFare: finalFormulaFare,
+                    finalizedAt: completedAt
+                }
+            });
+        }
+
+        await tx.rideStatusHistory.create({
+            data: {
+                rideId: ride.id,
+                oldStatus: ride.status,
+                newStatus: "completed",
+                changedByUserId: req.user.id
+            }
+        });
+
+        await tx.driver.update({
+            where: { id: driverId },
+            data: {
+                isAvailable: true,
+                totalRides: { increment: 1 }
+            }
+        });
+
+        await tx.rider.update({
+            where: { id: ride.riderId },
+            data: {
+                totalRides: { increment: 1 }
+            }
+        });
+
+        await tx.rideStop.updateMany({
+            where: {
+                rideId: ride.id,
+                stopType: "dropoff"
+            },
+            data: {
+                arrivedAt: completedAt,
+                departedAt: completedAt
+            }
+        });
+
+        return updated;
+    });
+
+    Promise.allSettled([
+        (async () => {
+            if (mongoose.connection.readyState === 1) {
+                await mongoose.connection.collection("ride_live_state").deleteOne({ ride_id: ride.id });
+                await DriverLocation.updateOne(
+                    { driver_id: driverId },
+                    { $set: { is_available: true, updated_at: new Date() } }
+                );
+                await mongoose.connection.collection("ride_summaries").insertOne({
+                    ride_id: ride.id,
+                    actual_distance_km: Number(actual_distance_km),
+                    actual_duration_min: Number(actual_duration_min),
+                    actual_traffic_delay_min: Number(actual_traffic_delay_min),
+                    waiting_time_min: Number(waiting_time_min),
+                    route_changed,
+                    completed_at: completedAt
+                });
+            }
+        })(),
+        (async () => {
+            if (neo4jDriver) {
+                const session = neo4jDriver.session();
+                try {
+                    await session.run(
+                        `
+                        MATCH (d:Driver {id: $driverId})
+                        MATCH (r:Ride {id: $rideId})
+                        MERGE (d)-[:COMPLETED]->(r)
+                        SET r.status = "completed", r.final_fare = $finalFare
+                        `,
+                        {
+                            driverId,
+                            rideId: ride.id,
+                            finalFare: finalFormulaFare
+                        }
+                    );
+                } finally {
+                    await session.close();
+                }
+            }
+        })()
+    ]).catch((err) => {
+        logger.warn(`Side-effects after completion failed: ${err.message}`);
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: "Ride completed successfully",
+        data: {
+            ride: {
+                id: updatedRide.id,
+                status: updatedRide.status,
+                completed_at: updatedRide.completedAt
+            },
+            summary: {
+                ride_id: ride.id,
+                actual_distance_km: Number(actual_distance_km),
+                actual_duration_min: Number(actual_duration_min),
+                actual_traffic_delay_min: Number(actual_traffic_delay_min),
+                waiting_time_min: Number(waiting_time_min),
+                route_changed,
+                completed_at: completedAt
+            },
+            fare: {
+                currency: "PKR",
+                actual_distance_km: Number(actual_distance_km),
+                actual_duration_min: Number(actual_duration_min),
+                actual_traffic_delay_min: Number(actual_traffic_delay_min),
+                waiting_time_min: Number(waiting_time_min),
+                final_formula_fare: finalFormulaFare,
+                final_ml_predicted_fare: finalMlPredictedFare,
+                final_fare: finalFormulaFare,
+                model_used: ride.fare?.modelUsed || "fare_prediction_linear_regression_v1",
+                finalized_at: completedAt
+            }
+        },
+        meta: null
+    });
+});
+
+const submitRating = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    if (req.user.role !== "rider") {
+        throw new ApiError(403, "Access denied. Rider account required");
+    }
+
+    const { ride_id } = req.params;
+    const { rating, comment = "" } = req.body || {};
+
+    if (rating === undefined || rating < 1 || rating > 5) {
+        throw new ApiError(400, "rating must be an integer between 1 and 5");
+    }
+
+    const riderId = req.user.riderProfile?.id || req.user.rider_profile?.id;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (ride.riderId !== riderId) {
+        throw new ApiError(403, "Access denied. You did not book this ride");
+    }
+
+    if (ride.status !== "completed") {
+        throw new ApiError(400, "Rating is only allowed for completed rides");
+    }
+
+    if (!ride.driverId) {
+        throw new ApiError(400, "No driver was assigned to this ride");
+    }
+
+    const existingRating = await prisma.rating.findUnique({
+        where: { rideId: ride.id }
+    });
+    if (existingRating) {
+        throw new ApiError(409, "A rating has already been submitted for this ride");
+    }
+
+    const createdRating = await prisma.$transaction(async (tx) => {
+        const r = await tx.rating.create({
+            data: {
+                rideId: ride.id,
+                riderId,
+                driverId: ride.driverId,
+                rating: parseInt(rating),
+                comment
+            }
+        });
+
+        const ratings = await tx.rating.findMany({
+            where: { driverId: ride.driverId },
+            select: { rating: true }
+        });
+        const count = ratings.length;
+        const sum = ratings.reduce((acc, curr) => acc + curr.rating, 0);
+        const newAverage = sum / count;
+
+        await tx.driver.update({
+            where: { id: ride.driverId },
+            data: {
+                averageRating: Number(newAverage.toFixed(2))
+            }
+        });
+
+        return r;
+    });
+
+    const driverDoc = await prisma.driver.findUnique({
+        where: { id: ride.driverId }
+    });
+
+    if (neo4jDriver) {
+        const session = neo4jDriver.session();
+        session.run(
+            `
+            MATCH (rider:Rider {id: $riderId})
+            MATCH (driver:Driver {id: $driverId})
+            MERGE (rider)-[rated:RATED]->(driver)
+            SET rated.stars = $rating
+            `,
+            {
+                riderId,
+                driverId: ride.driverId,
+                rating: parseInt(rating)
+            }
+        ).then(() => session.close())
+         .catch((err) => {
+             logger.warn(`Failed to update Neo4j with rating: ${err.message}`);
+             session.close();
+         });
+    }
+
+    return res.status(201).json({
+        success: true,
+        message: "Rating submitted successfully",
+        data: {
+            rating: {
+                id: createdRating.id,
+                ride_id: createdRating.rideId,
+                rider_id: createdRating.riderId,
+                driver_id: createdRating.driverId,
+                rating: createdRating.rating,
+                comment: createdRating.comment,
+                created_at: createdRating.createdAt
+            },
+            driver_average_rating: Number(driverDoc?.averageRating || rating)
+        },
+        meta: null
+    });
+});
+
+const getRideReceipt = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { ride_id } = req.params;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id },
+        include: {
+            stops: true,
+            fare: true,
+            rider: {
+                include: {
+                    user: true
+                }
+            },
+            driver: {
+                include: {
+                    user: true
+                }
+            },
+            vehicle: true
+        }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    if (ride.status !== "completed") {
+        throw new ApiError(400, "Receipt is only available for completed rides");
+    }
+
+    const completedAt = ride.completedAt || new Date();
+    const dateStr = completedAt.toISOString().split("T")[0].replace(/-/g, "");
+    const suffix = ride.id.slice(-4).toUpperCase();
+    const receiptNumber = `RCPT-${dateStr}-${suffix}`;
+
+    const baseFare = Number(ride.fare?.baseFare || 0);
+    const perKmRate = Number(ride.fare?.perKmRate || 0);
+    const perMinRate = Number(ride.fare?.perMinRate || 0);
+    const waitingPerMinRate = Number(ride.fare?.waitingPerMinRate || 0);
+    const trafficDelayPerMinRate = Number(ride.fare?.trafficDelayPerMinRate || 0);
+    const peakMultiplier = Number(ride.fare?.peakMultiplier || 1.0);
+    const surgeMultiplier = Number(ride.fare?.surgeMultiplier || 1.0);
+    const minimumFare = Number(ride.fare?.minimumFare || 0);
+
+    const actualDistanceKm = Number(ride.fare?.actualDistanceKm || 0);
+    const actualDurationMin = Number(ride.fare?.actualDurationMin || 0);
+    const actualTrafficDelayMin = Number(ride.fare?.actualTrafficDelayMin || 0);
+    const waitingTimeMin = Number(ride.fare?.waitingTimeMin || 0);
+
+    const distanceFare = Math.round(actualDistanceKm * perKmRate);
+    const durationFare = Math.round(actualDurationMin * perMinRate);
+    const waitingFare = Math.round(waitingTimeMin * waitingPerMinRate);
+    const trafficDelayFare = Math.round(actualTrafficDelayMin * trafficDelayPerMinRate);
+    const finalFare = Number(ride.fare?.finalFare || 0);
+
+    const pickupStop = (ride.stops || []).find((s) => s.stopType === "pickup" || s.stopOrder === 1);
+    const dropoffStop = (ride.stops || []).find((s) => s.stopType === "dropoff" || s.stopOrder === (ride.stops || []).length);
+
+    const receipt = {
+        receipt_number: receiptNumber,
+        ride_id: ride.id,
+        currency: ride.fare?.currency || "PKR",
+        rider: {
+            name: ride.rider?.user?.name || "Rider",
+            phone: ride.rider?.user?.phone || ""
+        },
+        driver: {
+            name: ride.driver?.user?.name || "Driver",
+            phone: ride.driver?.user?.phone || ""
+        },
+        vehicle: ride.vehicle
+            ? {
+                  make: ride.vehicle.make,
+                  model: ride.vehicle.model,
+                  plate_number: ride.vehicle.plateNumber,
+                  color: ride.vehicle.color
+              }
+            : null,
+        pickup: {
+            address: ride.pickupAddress || pickupStop?.address || "Pickup address",
+            latitude: Number(ride.pickupLatitude),
+            longitude: Number(ride.pickupLongitude)
+        },
+        dropoff: {
+            address: ride.dropoffAddress || dropoffStop?.address || "Dropoff address",
+            latitude: Number(ride.dropoffLatitude),
+            longitude: Number(ride.dropoffLongitude)
+        },
+        fare_breakdown: {
+            base_fare: baseFare,
+            distance_fare: distanceFare,
+            duration_fare: durationFare,
+            waiting_fare: waitingFare,
+            traffic_delay_fare: trafficDelayFare,
+            peak_multiplier: peakMultiplier,
+            surge_multiplier: surgeMultiplier,
+            minimum_fare: minimumFare,
+            final_fare: finalFare
+        },
+        actual_distance_km: actualDistanceKm,
+        actual_duration_min: actualDurationMin,
+        completed_at: completedAt,
+        delivery_status: "mock_sent",
+        delivery_channels: ["email", "sms"]
+    };
+
+    return res.status(200).json({
+        success: true,
+        message: "Receipt generated successfully",
+        data: {
+            receipt
+        },
+        meta: null
+    });
+});
+
+export {
+    estimateRideFare,
+    createRideRequest,
+    listMyRides,
+    getRideDetails,
+    getRideRoute,
+    getRideLiveState,
+    cancelRide,
+    driverArrived,
+    driverStartRide,
+    submitTrackingPoint,
+    getTrackingHistory,
+    completeRide,
+    submitRating,
+    getRideReceipt
+};

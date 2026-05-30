@@ -184,4 +184,98 @@ const getGoogleRouteDirections = async (origin, destination, stops = [], vehicle
     }
 };
 
-export { getGoogleRouteDirections };
+const getRoutePreview = async ({ pickup, dropoff, stops = [], vehicleType = "car" }) => {
+    const apiKey = getGoogleMapsApiKey();
+
+    if (!apiKey) {
+        throw new Error("Google Maps API key not found. Google routes service cannot compute route.");
+    }
+
+    if (!isValidCoordinate(pickup) || !isValidCoordinate(dropoff)) {
+        throw new Error("Invalid pickup or dropoff coordinates for Google routing.");
+    }
+
+    const validStops = Array.isArray(stops) ? stops.filter(isValidCoordinate) : [];
+
+    const travelMode = getGoogleTravelMode(vehicleType);
+
+    const requestBody = {
+        origin: toGoogleWaypoint(pickup),
+        destination: toGoogleWaypoint(dropoff),
+        intermediates: validStops.map(toGoogleWaypoint),
+        travelMode,
+        routingPreference: "TRAFFIC_AWARE_OPTIMAL",
+        computeAlternativeRoutes: false,
+        polylineQuality: "HIGH_QUALITY",
+        polylineEncoding: "ENCODED_POLYLINE",
+        languageCode: "en",
+        units: "METRIC"
+    };
+
+    const response = await fetch(GOOGLE_ROUTES_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": apiKey,
+            "X-Goog-FieldMask": [
+                "routes.distanceMeters",
+                "routes.duration",
+                "routes.staticDuration",
+                "routes.polyline.encodedPolyline",
+                "routes.legs.steps.distanceMeters",
+                "routes.legs.steps.staticDuration",
+                "routes.legs.steps.navigationInstruction.instructions",
+                "routes.legs.steps.startLocation",
+                "routes.legs.steps.endLocation"
+            ].join(",")
+        },
+        body: JSON.stringify(requestBody)
+    });
+
+    const body = await response.json();
+
+    if (!response.ok) {
+        throw new Error(`Google Routes API error: ${response.status} ${JSON.stringify(body)}`);
+    }
+
+    if (!Array.isArray(body.routes) || body.routes.length === 0) {
+        throw new Error("No routes found from Google Routes API");
+    }
+
+    const route = body.routes[0];
+
+    const distanceMeters = route.distanceMeters || 0;
+    const durationSeconds = parseGoogleDurationToSeconds(route.duration);
+    const staticDurationSeconds = route.staticDuration
+        ? parseGoogleDurationToSeconds(route.staticDuration)
+        : null;
+
+    const distance_km = distanceMeters / 1000;
+    const traffic_duration_min = durationSeconds / 60;
+    let normal_duration_min;
+    let traffic_delay_min;
+
+    if (route.staticDuration) {
+        normal_duration_min = staticDurationSeconds / 60;
+        traffic_delay_min = Math.max(0, traffic_duration_min - normal_duration_min);
+    } else {
+        normal_duration_min = traffic_duration_min;
+        traffic_delay_min = 0;
+    }
+
+    return {
+        route_id: "preview_route_" + Date.now(),
+        ride_id: null,
+        route_type: "pickup_to_dropoff",
+        provider: "google_routes",
+        selected: true,
+        distance_km,
+        normal_duration_min,
+        traffic_duration_min,
+        traffic_delay_min,
+        polyline: route.polyline?.encodedPolyline || "",
+        steps: mapGoogleSteps(route)
+    };
+};
+
+export { getGoogleRouteDirections, getRoutePreview };
