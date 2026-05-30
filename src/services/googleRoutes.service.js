@@ -90,12 +90,7 @@ const mapGoogleSteps = (route) => {
     return steps;
 };
 
-const getGoogleRouteDirections = async (
-    origin,
-    destination,
-    stops = [],
-    vehicleType = "car"
-) => {
+const getGoogleRouteDirections = async (origin, destination, stops = [], vehicleType = "car") => {
     const apiKey = getGoogleMapsApiKey();
 
     if (!apiKey) {
@@ -108,9 +103,7 @@ const getGoogleRouteDirections = async (
         return null;
     }
 
-    const validStops = Array.isArray(stops)
-        ? stops.filter(isValidCoordinate)
-        : [];
+    const validStops = Array.isArray(stops) ? stops.filter(isValidCoordinate) : [];
 
     try {
         const travelMode = getGoogleTravelMode(vehicleType);
@@ -163,9 +156,7 @@ const getGoogleRouteDirections = async (
 
         const distanceMeters = route.distanceMeters || 0;
         const trafficDurationSeconds = parseGoogleDurationToSeconds(route.duration);
-        const normalDurationSeconds = parseGoogleDurationToSeconds(
-            route.staticDuration || route.duration
-        );
+        const normalDurationSeconds = parseGoogleDurationToSeconds(route.staticDuration || route.duration);
 
         const trafficDurationMin = secondsToMinutes(trafficDurationSeconds);
         const normalDurationMin = secondsToMinutes(normalDurationSeconds);

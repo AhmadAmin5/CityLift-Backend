@@ -22,7 +22,7 @@ const connectPostgres = async () => {
             throw new Error("POSTGRES_URI is missing in environment variables");
         }
 
-        logger.info("Connecting PostgreSQL...");
+        // logger.info("Connecting PostgreSQL...");
 
         await prisma.$connect();
 

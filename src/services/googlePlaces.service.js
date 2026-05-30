@@ -104,20 +104,20 @@ const googlePlacesAutocomplete = async ({
     const selectedTypes = PLACE_TYPE_PRESETS[typePreset] || PLACE_TYPE_PRESETS.all;
 
     const requestBody = {
-    input: buildInput(trimmedQuery),
-    includedRegionCodes: ["pk"],
-    regionCode: "pk",
-    languageCode: "en",
+        input: buildInput(trimmedQuery),
+        includedRegionCodes: ["pk"],
+        regionCode: "pk",
+        languageCode: "en",
 
-    // Hard restrict results to Lahore rectangle.
-    // Do not send locationBias together with this.
-    locationRestriction: {
-        rectangle: LAHORE_RECTANGLE
-    },
+        // Hard restrict results to Lahore rectangle.
+        // Do not send locationBias together with this.
+        locationRestriction: {
+            rectangle: LAHORE_RECTANGLE
+        },
 
-    includeQueryPredictions: false,
-    includePureServiceAreaBusinesses: false
-};
+        includeQueryPredictions: false,
+        includePureServiceAreaBusinesses: false
+    };
 
     if (sessionToken) {
         requestBody.sessionToken = sessionToken;
@@ -156,14 +156,8 @@ const googlePlacesAutocomplete = async ({
                     provider: "google",
                     provider_place_id: prediction.placeId,
                     place_id: prediction.placeId,
-                    name:
-                        prediction.structuredFormat?.mainText?.text ||
-                        prediction.text?.text ||
-                        "",
-                    address:
-                        prediction.structuredFormat?.secondaryText?.text ||
-                        prediction.text?.text ||
-                        "",
+                    name: prediction.structuredFormat?.mainText?.text || prediction.text?.text || "",
+                    address: prediction.structuredFormat?.secondaryText?.text || prediction.text?.text || "",
                     full_address: prediction.text?.text || "",
                     latitude: null,
                     longitude: null,

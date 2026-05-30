@@ -240,7 +240,7 @@ const getRoutePreview = asyncHandler(async (req, res) => {
 
     // Fallback mock routing if Mapbox fails or isn't configured
     if (!data) {
-    throw new ApiError(503, "Route preview is currently unavailable. Please try again.");
+        throw new ApiError(503, "Route preview is currently unavailable. Please try again.");
     } else {
         // Envelop route field to match contract
         data = {

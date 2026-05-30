@@ -8,6 +8,7 @@ import logger from "./utils/logger.js";
 
 const startServer = async () => {
     try {
+        logger.info("Connecting databases...");
         await Promise.all([connectMongoDB(), connectPostgres(), connectNeo4j()]);
 
         app.listen(process.env.PORT || 8000, () => {

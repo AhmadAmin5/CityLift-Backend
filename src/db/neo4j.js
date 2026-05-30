@@ -5,7 +5,7 @@ let driver;
 
 const connectNeo4j = async () => {
     try {
-        logger.info("Connecting Neo4j...");
+        // logger.info("Connecting Neo4j...");
 
         if (!process.env.NEO4J_URI || !process.env.NEO4J_USERNAME || !process.env.NEO4J_PASSWORD)
             throw new Error("Neo4j credentials messing in .env");
