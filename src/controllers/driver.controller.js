@@ -1,3 +1,11 @@
+import crypto from "node:crypto";
+import mongoose from "mongoose";
+
+import { driver as neo4jDriver } from "../db/neo4j.js";
+import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
+import logger from "../utils/logger.js";
+
+
 import { prisma } from "../db/postgres.js";
 
 import ApiError from "../utils/ApiError.js";
@@ -787,6 +795,569 @@ const setActiveVehicle = asyncHandler(async (req, res) => {
     );
 });
 
+
+//----------------------------------------
+
+
+const RIDE_OFFER_COLLECTION = "ride_routes";
+const ALLOWED_RIDE_OFFER_STATUSES = new Set(["sent", "accepted", "declined", "expired"]);
+
+const toSafeNumber = (value, fallback = null) => {
+    if (value === null || value === undefined) return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+};
+
+const haversineDistanceKm = (lat1, lon1, lat2, lon2) => {
+    const R = 6371;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+            Math.cos((lat2 * Math.PI) / 180) *
+            Math.sin(dLon / 2) *
+            Math.sin(dLon / 2);
+    return Number((R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)))).toFixed(2));
+};
+
+const serializeRideFareForOffer = (fare) => {
+    if (!fare) return null;
+
+    return {
+        currency: fare.currency,
+        estimated_min_fare: toSafeNumber(fare.estimatedMinFare),
+        estimated_max_fare: toSafeNumber(fare.estimatedMaxFare)
+    };
+};
+
+const serializeRideForOffer = (ride) => ({
+    id: ride.id,
+    pickup: {
+        latitude: Number(ride.pickupLatitude),
+        longitude: Number(ride.pickupLongitude),
+        address: ride.pickupAddress || null
+    },
+    dropoff: {
+        latitude: Number(ride.dropoffLatitude),
+        longitude: Number(ride.dropoffLongitude),
+        address: ride.dropoffAddress || null
+    },
+    estimated_fare: serializeRideFareForOffer(ride.fare),
+    rider_note_to_driver: ride.riderNoteToDriver || null
+});
+
+const serializeRideOffer = (offer) => ({
+    id: offer.id,
+    ride_id: offer.rideId,
+    driver_id: offer.driverId,
+    status: offer.status,
+    distance_to_pickup_km: toSafeNumber(offer.distanceToPickupKm),
+    driver_rating_at_offer: toSafeNumber(offer.driverRatingAtOffer),
+    decline_reason: offer.declineReason,
+    offered_at: offer.offeredAt,
+    responded_at: offer.respondedAt,
+    expires_at: offer.expiresAt,
+    ride: serializeRideForOffer(offer.ride)
+});
+
+const serializeAcceptedRide = (ride) => ({
+    id: ride.id,
+    rider_id: ride.riderId,
+    driver_id: ride.driverId,
+    vehicle_id: ride.vehicleId,
+    status: ride.status,
+    accepted_at: ride.acceptedAt,
+    pickup: {
+        latitude: Number(ride.pickupLatitude),
+        longitude: Number(ride.pickupLongitude),
+        address: ride.pickupAddress || null
+    },
+    dropoff: {
+        latitude: Number(ride.dropoffLatitude),
+        longitude: Number(ride.dropoffLongitude),
+        address: ride.dropoffAddress || null
+    }
+});
+
+const getDriverByUserId = async (client, userId) => {
+    return client.driver.findUnique({
+        where: {
+            userId
+        },
+        include: {
+            vehicles: {
+                where: {
+                    isActive: true,
+                    verificationStatus: "approved"
+                },
+                take: 1
+            }
+        }
+    });
+};
+
+const getDriverCurrentLocation = async (driverId) => {
+    if (mongoose.connection.readyState !== 1) return null;
+
+    const locationDoc = await DriverLocation.findOne({
+        driver_id: driverId,
+        is_available: true
+    }).lean();
+
+    const coordinates = locationDoc?.location?.coordinates;
+
+    if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
+
+    const longitude = Number(coordinates[0]);
+    const latitude = Number(coordinates[1]);
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+    return { latitude, longitude };
+};
+
+const buildDriverToPickupFallbackRoute = (origin, pickup, vehicleType = "car") => {
+    const distanceKm = origin ? haversineDistanceKm(origin.latitude, origin.longitude, pickup.latitude, pickup.longitude) : 0;
+
+    const averageSpeedByVehicle = {
+        bike: 22,
+        rickshaw: 18,
+        car: 28
+    };
+
+    const speed = averageSpeedByVehicle[String(vehicleType).toLowerCase()] || 28;
+    const normalDurationMin = origin ? Math.max(1, Math.round((distanceKm / speed) * 60)) : 0;
+    const trafficDelayMin = origin ? Math.max(1, Math.round(normalDurationMin * 0.25)) : 0;
+    const trafficDurationMin = normalDurationMin + trafficDelayMin;
+
+    return {
+        route_id: `route_driver_to_pickup_${crypto.randomUUID()}`,
+        ride_id: null,
+        route_type: "driver_to_pickup",
+        provider: "mock",
+        selected: true,
+        distance_km: Number(distanceKm.toFixed(2)),
+        normal_duration_min: normalDurationMin,
+        traffic_duration_min: trafficDurationMin,
+        traffic_delay_min: trafficDelayMin,
+        polyline: "",
+        steps: []
+    };
+};
+
+const buildDriverToPickupRoute = async ({ driverId, pickup, vehicleType = "car" }) => {
+    const origin = await getDriverCurrentLocation(driverId);
+
+    const liveRoute =
+        origin && (await getGoogleRouteDirections(origin, pickup, [], vehicleType));
+
+    const route = liveRoute || buildDriverToPickupFallbackRoute(origin, pickup, vehicleType);
+
+    return {
+        route_id: `route_driver_to_pickup_${crypto.randomUUID()}`,
+        ride_id: null,
+        route_type: "driver_to_pickup",
+        provider: route.provider || "mock",
+        selected: true,
+        distance_km: toSafeNumber(route.distance_km, 0),
+        normal_duration_min: Math.round(toSafeNumber(route.normal_duration_min, 0)),
+        traffic_duration_min: Math.round(toSafeNumber(route.traffic_duration_min, 0)),
+        traffic_delay_min: Math.round(toSafeNumber(route.traffic_delay_min, 0)),
+        polyline: route.polyline || "",
+        steps: Array.isArray(route.steps) ? route.steps : []
+    };
+};
+
+const persistDriverToPickupRouteToMongo = async ({ route, rideId, driverId, pickup, vehicleType }) => {
+    if (mongoose.connection.readyState !== 1) return null;
+
+    const collection = mongoose.connection.collection(RIDE_OFFER_COLLECTION);
+
+    const document = {
+        route_id: route.route_id,
+        ride_id: rideId,
+        driver_id: driverId,
+        route_type: "driver_to_pickup",
+        provider: route.provider,
+        selected: true,
+        distance_km: route.distance_km,
+        normal_duration_min: route.normal_duration_min,
+        traffic_duration_min: route.traffic_duration_min,
+        traffic_delay_min: route.traffic_delay_min,
+        polyline: route.polyline,
+        steps: route.steps || [],
+        pickup,
+        vehicle_type: vehicleType,
+        created_at: new Date(),
+        updated_at: new Date()
+    };
+
+    await collection.insertOne(document);
+    return document;
+};
+
+const markDriverUnavailableInMongo = async (driverId) => {
+    if (mongoose.connection.readyState !== 1) return null;
+
+    return DriverLocation.findOneAndUpdate(
+        {
+            driver_id: driverId
+        },
+        {
+            $set: {
+                is_available: false,
+                updated_at: new Date()
+            }
+        },
+        {
+            new: true
+        }
+    );
+};
+
+const persistDriverAcceptedRideToNeo4j = async ({ driverId, rideId }) => {
+    if (!neo4jDriver) return;
+
+    const session = neo4jDriver.session();
+
+    try {
+        await session.run(
+            `
+            MERGE (d:Driver {id: $driverId})
+            MERGE (r:Ride {id: $rideId})
+            MERGE (d)-[:ACCEPTED]->(r)
+            `,
+            {
+                driverId,
+                rideId
+            }
+        );
+    } finally {
+        await session.close();
+    }
+};
+
+const listMyRideOffers = asyncHandler(async (req, res) => {
+    const user = req.user;
+
+    if (user.role !== "driver") {
+        throw new ApiError(403, "Only drivers can access this resource");
+    }
+
+    const { status } = req.query;
+
+    if (status !== undefined && status !== null && String(status).trim() !== "") {
+        if (!ALLOWED_RIDE_OFFER_STATUSES.has(String(status).trim().toLowerCase())) {
+            throw new ApiError(400, "Invalid ride offer status");
+        }
+    }
+
+    const driver = await getDriverByUserId(prisma, user.id);
+
+    if (!driver) {
+        throw new ApiError(404, "Driver profile not found");
+    }
+
+    const now = new Date();
+
+    await prisma.rideOffer.updateMany({
+        where: {
+            driverId: driver.id,
+            status: "sent",
+            expiresAt: {
+                lt: now
+            }
+        },
+        data: {
+            status: "expired"
+        }
+    });
+
+    const rideOffers = await prisma.rideOffer.findMany({
+        where: {
+            driverId: driver.id,
+            ...(status ? { status: String(status).trim().toLowerCase() } : {})
+        },
+        orderBy: {
+            offeredAt: "desc"
+        },
+        include: {
+            ride: {
+                include: {
+                    fare: true
+                }
+            }
+        }
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            rideOffers.map(serializeRideOffer),
+            "Ride offers fetched successfully"
+        )
+    );
+});
+
+const acceptRideOffer = asyncHandler(async (req, res) => {
+    const user = req.user;
+
+    if (user.role !== "driver") {
+        throw new ApiError(403, "Only drivers can access this resource");
+    }
+
+    const { offer_id } = req.params;
+
+    const result = await prisma.$transaction(async (tx) => {
+        const driver = await getDriverByUserId(tx, user.id);
+
+        if (!driver) {
+            throw new ApiError(404, "Driver profile not found");
+        }
+
+        if (!driver.isAvailable) {
+            throw new ApiError(409, "Driver is not available");
+        }
+
+        const activeVehicle = driver.vehicles?.[0] || null;
+
+        if (!activeVehicle) {
+            throw new ApiError(400, "Driver must have an active approved vehicle");
+        }
+
+        const offer = await tx.rideOffer.findFirst({
+            where: {
+                id: offer_id,
+                driverId: driver.id
+            },
+            include: {
+                ride: true
+            }
+        });
+
+        if (!offer) {
+            throw new ApiError(404, "Ride offer not found");
+        }
+
+        const now = new Date();
+
+        if (offer.status === "expired" || (offer.expiresAt && offer.expiresAt < now)) {
+            if (offer.status !== "expired") {
+                await tx.rideOffer.update({
+                    where: { id: offer.id },
+                    data: {
+                        status: "expired"
+                    }
+                });
+            }
+            throw new ApiError(410, "Ride offer has expired");
+        }
+
+        if (offer.status !== "sent") {
+            throw new ApiError(409, "Ride offer cannot be accepted in its current state");
+        }
+
+        if (offer.ride.status !== "searching_driver" && offer.ride.status !== "requested") {
+            throw new ApiError(409, "Ride is no longer available for acceptance");
+        }
+
+        const updatedDriver = await tx.driver.update({
+            where: { id: driver.id },
+            data: {
+                isAvailable: false
+            }
+        });
+
+        const updatedOffer = await tx.rideOffer.update({
+            where: { id: offer.id },
+            data: {
+                status: "accepted",
+                respondedAt: now
+            }
+        });
+
+        const updatedRide = await tx.ride.update({
+            where: { id: offer.rideId },
+            data: {
+                driverId: driver.id,
+                vehicleId: activeVehicle.id,
+                status: "accepted",
+                acceptedAt: now
+            }
+        });
+
+        await tx.rideStatusHistory.create({
+            data: {
+                rideId: offer.rideId,
+                oldStatus: offer.ride.status,
+                newStatus: "accepted",
+                changedByUserId: user.id
+            }
+        });
+
+        await tx.rideOffer.updateMany({
+            where: {
+                rideId: offer.rideId,
+                status: "sent",
+                id: {
+                    not: offer.id
+                }
+            },
+            data: {
+                status: "expired",
+                respondedAt: now
+            }
+        });
+
+        return {
+            driver: updatedDriver,
+            offer: updatedOffer,
+            ride: updatedRide,
+            activeVehicle
+        };
+    });
+
+    const pickup = {
+        latitude: Number(result.ride.pickupLatitude),
+        longitude: Number(result.ride.pickupLongitude),
+        address: result.ride.pickupAddress || null
+    };
+
+    const driverToPickupRoute = await buildDriverToPickupRoute({
+        driverId: result.driver.id,
+        pickup,
+        vehicleType: result.activeVehicle.vehicleType
+    });
+
+    await Promise.allSettled([
+        markDriverUnavailableInMongo(result.driver.id),
+        persistDriverToPickupRouteToMongo({
+            route: driverToPickupRoute,
+            rideId: result.ride.id,
+            driverId: result.driver.id,
+            pickup,
+            vehicleType: result.activeVehicle.vehicleType
+        }),
+        persistDriverAcceptedRideToNeo4j({
+            driverId: result.driver.id,
+            rideId: result.ride.id
+        })
+    ]).then((results) => {
+        results.forEach((r) => {
+            if (r.status === "rejected") {
+                logger.warn(`Driver ride-offer side effect failed: ${r.reason?.message || r.reason}`);
+            }
+        });
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                offer: {
+                    id: result.offer.id,
+                    ride_id: result.offer.rideId,
+                    driver_id: result.offer.driverId,
+                    status: result.offer.status,
+                    responded_at: result.offer.respondedAt
+                },
+                ride: serializeAcceptedRide(result.ride),
+                driver_to_pickup_route: driverToPickupRoute
+            },
+            "Ride offer accepted successfully"
+        )
+    );
+});
+
+const declineRideOffer = asyncHandler(async (req, res) => {
+    const user = req.user;
+
+    if (user.role !== "driver") {
+        throw new ApiError(403, "Only drivers can access this resource");
+    }
+
+    const { offer_id } = req.params;
+    const { decline_reason = null } = req.body || {};
+
+    if (decline_reason !== null && decline_reason !== undefined && typeof decline_reason !== "string") {
+        throw new ApiError(400, "decline_reason must be a string");
+    }
+
+    const normalizedDeclineReason =
+        typeof decline_reason === "string" && decline_reason.trim() ? decline_reason.trim() : null;
+
+    const result = await prisma.$transaction(async (tx) => {
+        const driver = await getDriverByUserId(tx, user.id);
+
+        if (!driver) {
+            throw new ApiError(404, "Driver profile not found");
+        }
+
+        const offer = await tx.rideOffer.findFirst({
+            where: {
+                id: offer_id,
+                driverId: driver.id
+            },
+            include: {
+                ride: true
+            }
+        });
+
+        if (!offer) {
+            throw new ApiError(404, "Ride offer not found");
+        }
+
+        const now = new Date();
+
+        if (offer.status === "expired" || (offer.expiresAt && offer.expiresAt < now)) {
+            if (offer.status !== "expired") {
+                await tx.rideOffer.update({
+                    where: { id: offer.id },
+                    data: { status: "expired" }
+                });
+            }
+            throw new ApiError(410, "Ride offer has expired");
+        }
+
+        if (offer.status !== "sent") {
+            throw new ApiError(409, "Ride offer cannot be declined in its current state");
+        }
+
+        const updatedOffer = await tx.rideOffer.update({
+            where: {
+                id: offer.id
+            },
+            data: {
+                status: "declined",
+                declineReason: normalizedDeclineReason,
+                respondedAt: now
+            }
+        });
+
+        return {
+            offer: updatedOffer
+        };
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                offer: {
+                    id: result.offer.id,
+                    ride_id: result.offer.rideId,
+                    driver_id: result.offer.driverId,
+                    status: result.offer.status,
+                    decline_reason: result.offer.declineReason,
+                    responded_at: result.offer.respondedAt
+                }
+            },
+            "Ride offer declined successfully"
+        )
+    );
+});
+
 export {
     getCurrentDriverProfile,
     updateDriverAvailability,
@@ -796,5 +1367,8 @@ export {
     getMyVehicles,
     createVehicle,
     updateVehicle,
-    setActiveVehicle
+    setActiveVehicle,
+    listMyRideOffers,
+    acceptRideOffer,
+    declineRideOffer
 };
