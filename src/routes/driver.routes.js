@@ -14,7 +14,9 @@ import {
     setActiveVehicle,
     listMyRideOffers,
     acceptRideOffer,
-    declineRideOffer
+    declineRideOffer,
+    getDriverEarningsDashboard,
+    getDriverRatings
 } from "../controllers/driver.controller.js";
 
 import upload from "../middlewares/multer.middleware.js";
@@ -36,5 +38,8 @@ router.post("/me/vehicles/:vehicle_id/set-active", setActiveVehicle);
 router.get("/me/ride-offers", listMyRideOffers);
 router.post("/me/ride-offers/:offer_id/accept", acceptRideOffer);
 router.post("/me/ride-offers/:offer_id/decline", declineRideOffer);
+
+router.get("/me/earnings", getDriverEarningsDashboard);
+router.get("/me/ratings", getDriverRatings);
 
 export default router;

@@ -796,7 +796,7 @@ const setActiveVehicle = asyncHandler(async (req, res) => {
 });
 
 
-//----------------------------------------
+// ----------------- Section 14
 
 
 const RIDE_OFFER_COLLECTION = "ride_routes";
@@ -1358,6 +1358,338 @@ const declineRideOffer = asyncHandler(async (req, res) => {
     );
 });
 
+// ----------------- Section 15
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const pad2 = (value) => String(value).padStart(2, "0");
+
+const formatDateOnlyUTC = (date) =>
+    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+
+const parseDateOnlyUTC = (value, fieldName) => {
+    if (value === undefined || value === null || String(value).trim() === "") {
+        return null;
+    }
+
+    const input = String(value).trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input);
+
+    if (!match) {
+        throw new ApiError(400, `${fieldName} must be in YYYY-MM-DD format`);
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+
+    const date = new Date(Date.UTC(year, month - 1, day));
+
+    if (Number.isNaN(date.getTime())) {
+        throw new ApiError(400, `Invalid ${fieldName}`);
+    }
+
+    return date;
+};
+
+const startOfUtcDay = (date) =>
+    new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
+
+const endOfUtcDay = (date) =>
+    new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
+
+const startOfUtcWeek = (date) => {
+    const d = startOfUtcDay(date);
+    const day = d.getUTCDay(); // 0 = Sunday, 1 = Monday ...
+    const mondayOffset = (day + 6) % 7;
+    d.setUTCDate(d.getUTCDate() - mondayOffset);
+    return d;
+};
+
+const endOfUtcWeek = (date) => {
+    const d = startOfUtcWeek(date);
+    d.setUTCDate(d.getUTCDate() + 6);
+    return endOfUtcDay(d);
+};
+
+const startOfUtcMonth = (date) =>
+    new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 0, 0, 0, 0));
+
+const endOfUtcMonth = (date) =>
+    new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+
+const addPeriod = (date, period) => {
+    const next = new Date(date);
+
+    if (period === "daily") {
+        next.setUTCDate(next.getUTCDate() + 1);
+    } else if (period === "weekly") {
+        next.setUTCDate(next.getUTCDate() + 7);
+    } else {
+        next.setUTCMonth(next.getUTCMonth() + 1);
+    }
+
+    return next;
+};
+
+const bucketStartFor = (date, period) => {
+    if (period === "weekly") return startOfUtcWeek(date);
+    if (period === "monthly") return startOfUtcMonth(date);
+    return startOfUtcDay(date);
+};
+
+const bucketEndFor = (date, period) => {
+    if (period === "weekly") return endOfUtcWeek(date);
+    if (period === "monthly") return endOfUtcMonth(date);
+    return endOfUtcDay(date);
+};
+
+const roundMoney = (value) => Number(Number(value || 0).toFixed(2));
+
+const resolveEarningsRange = (period, fromRaw, toRaw) => {
+    const now = new Date();
+
+    const periodStart =
+        period === "weekly"
+            ? startOfUtcWeek(now)
+            : period === "monthly"
+              ? startOfUtcMonth(now)
+              : startOfUtcDay(now);
+
+    const periodEnd =
+        period === "weekly" ? endOfUtcWeek(now) : period === "monthly" ? endOfUtcMonth(now) : endOfUtcDay(now);
+
+    const fromDate = parseDateOnlyUTC(fromRaw, "from");
+    const toDate = parseDateOnlyUTC(toRaw, "to");
+
+    let rangeStart = fromDate ? startOfUtcDay(fromDate) : periodStart;
+    let rangeEnd = toDate ? endOfUtcDay(toDate) : periodEnd;
+
+    if (!fromDate && toDate) {
+        rangeStart = startOfUtcDay(toDate);
+    }
+
+    if (fromDate && !toDate) {
+        rangeEnd = endOfUtcDay(fromDate);
+    }
+
+    if (rangeStart.getTime() > rangeEnd.getTime()) {
+        throw new ApiError(400, "from must be earlier than or equal to to");
+    }
+
+    return { rangeStart, rangeEnd };
+};
+
+const getAuthenticatedDriverProfile = async (userId) => {
+    const driver = await prisma.driver.findUnique({
+        where: {
+            userId
+        },
+        include: {
+            user: true
+        }
+    });
+
+    if (!driver) {
+        throw new ApiError(404, "Driver profile not found");
+    }
+
+    return driver;
+};
+
+const getDriverEarningsDashboard = asyncHandler(async (req, res) => {
+    if (!req.user || req.user.role !== "driver") {
+        throw new ApiError(403, "Only drivers can access this resource");
+    }
+
+    const period = String(req.query.period || "daily").trim().toLowerCase();
+
+    if (!["daily", "weekly", "monthly"].includes(period)) {
+        throw new ApiError(400, "period must be daily, weekly, or monthly");
+    }
+
+    const { rangeStart, rangeEnd } = resolveEarningsRange(period, req.query.from, req.query.to);
+
+    const driver = await prisma.driver.findUnique({
+        where: {
+            userId: req.user.id
+        }
+    });
+
+    if (!driver) {
+        throw new ApiError(404, "Driver profile not found");
+    }
+
+    const completedRides = await prisma.ride.findMany({
+        where: {
+            driverId: driver.id,
+            status: "completed",
+            completedAt: {
+                gte: rangeStart,
+                lte: rangeEnd
+            }
+        },
+        select: {
+            id: true,
+            completedAt: true,
+            fare: {
+                select: {
+                    finalFare: true,
+                    currency: true
+                }
+            }
+        },
+        orderBy: {
+            completedAt: "asc"
+        }
+    });
+
+    const buckets = new Map();
+    let totalRides = 0;
+    let grossEarnings = 0;
+    let driverEarning = 0;
+    let platformCommission = 0;
+    let currency = "PKR";
+
+    for (const ride of completedRides) {
+        const finalFare = Number(ride.fare?.finalFare ?? 0);
+
+        if (!Number.isFinite(finalFare) || finalFare <= 0) {
+            continue;
+        }
+
+        const completedAt = ride.completedAt ? new Date(ride.completedAt) : null;
+        if (!completedAt || Number.isNaN(completedAt.getTime())) {
+            continue;
+        }
+
+        if (ride.fare?.currency) {
+            currency = ride.fare.currency;
+        }
+
+        const bucketStart = bucketStartFor(completedAt, period);
+        const bucketEnd = bucketEndFor(completedAt, period);
+        const key = bucketStart.toISOString();
+
+        if (!buckets.has(key)) {
+            buckets.set(key, {
+                period_start: formatDateOnlyUTC(bucketStart),
+                period_end: formatDateOnlyUTC(bucketEnd),
+                completed_rides: 0,
+                gross_earnings: 0,
+                estimated_driver_earning: 0,
+                estimated_platform_commission: 0
+            });
+        }
+
+        const bucket = buckets.get(key);
+
+        bucket.completed_rides += 1;
+        bucket.gross_earnings = roundMoney(bucket.gross_earnings + finalFare);
+        bucket.estimated_driver_earning = roundMoney(bucket.estimated_driver_earning + finalFare * 0.8);
+        bucket.estimated_platform_commission = roundMoney(bucket.estimated_platform_commission + finalFare * 0.2);
+
+        totalRides += 1;
+        grossEarnings = roundMoney(grossEarnings + finalFare);
+        driverEarning = roundMoney(driverEarning + finalFare * 0.8);
+        platformCommission = roundMoney(platformCommission + finalFare * 0.2);
+    }
+
+    const items = Array.from(buckets.values()).sort((a, b) => a.period_start.localeCompare(b.period_start));
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                period,
+                currency,
+                summary: {
+                    total_rides: totalRides,
+                    gross_earnings: grossEarnings,
+                    estimated_driver_earning: driverEarning,
+                    estimated_platform_commission: platformCommission
+                },
+                items
+            },
+            "Earnings fetched successfully"
+        )
+    );
+});
+
+const getDriverRatings = asyncHandler(async (req, res) => {
+    if (!req.user || req.user.role !== "driver") {
+        throw new ApiError(403, "Only drivers can access this resource");
+    }
+
+    const page = Math.max(1, Number.parseInt(req.query.page || "1", 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit || "20", 10) || 20));
+    const skip = (page - 1) * limit;
+
+    const driver = await prisma.driver.findUnique({
+        where: {
+            userId: req.user.id
+        }
+    });
+
+    if (!driver) {
+        throw new ApiError(404, "Driver profile not found");
+    }
+
+    const [total, ratings] = await Promise.all([
+        prisma.rating.count({
+            where: {
+                driverId: driver.id
+            }
+        }),
+        prisma.rating.findMany({
+            where: {
+                driverId: driver.id
+            },
+            orderBy: {
+                createdAt: "desc"
+            },
+            skip,
+            take: limit,
+            include: {
+                rider: {
+                    include: {
+                        user: {
+                            select: {
+                                name: true,
+                                profilePhotoUrl: true
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    ]);
+
+    const data = ratings.map((rating) => ({
+        id: rating.id,
+        ride_id: rating.rideId,
+        rider_id: rating.riderId,
+        driver_id: rating.driverId,
+        rating: rating.rating,
+        comment: rating.comment,
+        created_at: rating.createdAt,
+        rider: {
+            name: rating.rider?.user?.name || null,
+            profile_photo_url: rating.rider?.user?.profilePhotoUrl || null
+        }
+    }));
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            data,
+            "Driver ratings fetched successfully"
+        )
+    );
+});
+
+
+
 export {
     getCurrentDriverProfile,
     updateDriverAvailability,
@@ -1370,5 +1702,7 @@ export {
     setActiveVehicle,
     listMyRideOffers,
     acceptRideOffer,
-    declineRideOffer
+    declineRideOffer,
+    getDriverEarningsDashboard,
+    getDriverRatings
 };
