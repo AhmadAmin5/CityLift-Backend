@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CityLift Realtime Socket.IO Tester</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-color: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --success: #10b981;
+            --danger: #ef4444;
+            --border: #334155;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        header {
+            grid-column: span 2;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            color: var(--text-color);
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .full-width {
+            grid-column: span 2;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background-color: #0f172a;
+            color: white;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+
+        .btn:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn-success {
+            background-color: var(--success);
+        }
+
+        .btn-success:hover {
+            background-color: #059669;
+        }
+
+        .btn-danger {
+            background-color: var(--danger);
+        }
+
+        .btn-danger:hover {
+            background-color: #dc2626;
+        }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: var(--danger);
+            display: inline-block;
+        }
+
+        .status-dot.connected {
+            background-color: var(--success);
+        }
+
+        .status-text {
+            font-weight: bold;
+        }
+
+        .log-container {
+            background-color: #020617;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+        }
+
+        .log-entry {
+            margin-bottom: 12px;
+            border-left: 3px solid var(--border);
+            padding-left: 10px;
+        }
+
+        .log-entry.sent {
+            border-left-color: var(--primary);
+        }
+
+        .log-entry.received {
+            border-left-color: var(--success);
+        }
+
+        .log-entry.error {
+            border-left-color: var(--danger);
+        }
+
+        .log-time {
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .log-type {
+            font-weight: bold;
+            margin-bottom: 3px;
+        }
+
+        .log-data {
+            white-space: pre-wrap;
+            color: #e2e8f0;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+    </style>
+    <!-- Include Socket.IO client library from CDN -->
+    <script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
+</head>
+<body>
+
+    <header>
+        <h1>CityLift Realtime Socket.IO Tester</h1>
+        <p style="color: var(--text-muted)">Test auth connection and simulate client events locally</p>
+    </header>
+
+    <div class="container">
+        
+        <!-- Connection Panel -->
+        <div class="panel">
+            <h2>1. Connection Settings</h2>
+            <div class="form-group">
+                <label for="serverUrl">Socket.IO Base URL (Realtime Namespace)</label>
+                <input type="text" id="serverUrl" value="http://localhost:8000/realtime">
+            </div>
+            <div class="form-group">
+                <label for="token">JWT Access Token</label>
+                <textarea id="token" rows="4" placeholder="Paste your Bearer token here..."></textarea>
+            </div>
+            <div class="grid-2">
+                <button class="btn btn-success" id="connectBtn">Connect</button>
+                <button class="btn btn-danger" id="disconnectBtn" disabled>Disconnect</button>
+            </div>
+            
+            <div class="status-bar">
+                <span class="status-dot" id="statusDot"></span>
+                <span class="status-text" id="statusText">Disconnected</span>
+            </div>
+        </div>
+
+        <!-- Event Logs -->
+        <div class="panel" style="display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h2>Event Logs</h2>
+                <button class="btn" style="background-color: var(--border); padding: 5px 10px; font-size: 12px;" id="clearLogs">Clear</button>
+            </div>
+            <div class="log-container" id="logContainer">
+                <div class="log-entry">
+                    <span class="log-time">[System]</span>
+                    <div class="log-type">Welcome</div>
+                    <div class="log-data">Enter your Server URL and JWT token, then click Connect to begin testing.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Ride Interaction Panel -->
+        <div class="panel">
+            <h2>2. Ride Client Events</h2>
+            
+            <!-- Join / Leave Ride Room -->
+            <div style="border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 15px;">
+                <h3>Join/Leave Ride Room</h3>
+                <div class="form-group">
+                    <label for="rideIdInput">Ride ID (UUID)</label>
+                    <input type="text" id="rideIdInput" placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000">
+                </div>
+                <div class="grid-2">
+                    <button class="btn" id="joinRideBtn">Emit ride:join</button>
+                    <button class="btn" style="background-color: var(--border)" id="leaveRideBtn">Emit ride:leave</button>
+                </div>
+            </div>
+
+            <!-- Ride Tracking Update -->
+            <div>
+                <h3>Ride Tracking Update (Driver Active Tracking)</h3>
+                <div class="form-group">
+                    <label for="trackRideId">Ride ID (UUID)</label>
+                    <input type="text" id="trackRideId" placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000">
+                </div>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label for="trackLat">Latitude</label>
+                        <input type="number" id="trackLat" step="any" value="31.5204">
+                    </div>
+                    <div class="form-group">
+                        <label for="trackLng">Longitude</label>
+                        <input type="number" id="trackLng" step="any" value="74.3587">
+                    </div>
+                </div>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label for="trackSpeed">Speed (km/h)</label>
+                        <input type="number" id="trackSpeed" value="34">
+                    </div>
+                    <div class="form-group">
+                        <label for="trackHeading">Heading (degrees)</label>
+                        <input type="number" id="trackHeading" value="88">
+                    </div>
+                </div>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label for="trackTraffic">Traffic Level</label>
+                        <select id="trackTraffic">
+                            <option value="low">Low</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="high">High</option>
+                            <option value="heavy">Heavy</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="trackEta">ETA (min)</label>
+                        <input type="number" id="trackEta" value="14">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="trackDistance">Distance Remaining (km)</label>
+                    <input type="number" id="trackDistance" step="any" value="6.3">
+                </div>
+                <button class="btn" id="emitTrackingBtn">Emit ride:tracking:update</button>
+            </div>
+        </div>
+
+        <!-- Driver Interaction Panel -->
+        <div class="panel">
+            <h2>3. Driver Client Events</h2>
+            
+            <!-- Driver Location Update -->
+            <div>
+                <h3>Driver Location Update (Online Status)</h3>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label for="driverLat">Latitude</label>
+                        <input type="number" id="driverLat" step="any" value="31.5204">
+                    </div>
+                    <div class="form-group">
+                        <label for="driverLng">Longitude</label>
+                        <input type="number" id="driverLng" step="any" value="74.3587">
+                    </div>
+                </div>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label for="driverHeading">Heading (degrees)</label>
+                        <input type="number" id="driverHeading" value="90">
+                    </div>
+                    <div class="form-group">
+                        <label for="driverSpeed">Speed (km/h)</label>
+                        <input type="number" id="driverSpeed" value="35">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="driverArea">Current Area</label>
+                    <input type="text" id="driverArea" value="Gulberg">
+                </div>
+                <button class="btn" id="emitDriverLocBtn">Emit driver:location:update</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let socket = null;
+
+        // UI Elements
+        const serverUrlInput = document.getElementById('serverUrl');
+        const tokenInput = document.getElementById('token');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const logContainer = document.getElementById('logContainer');
+        const clearLogsBtn = document.getElementById('clearLogs');
+
+        // Form elements
+        const rideIdInput = document.getElementById('rideIdInput');
+        const joinRideBtn = document.getElementById('joinRideBtn');
+        const leaveRideBtn = document.getElementById('leaveRideBtn');
+
+        const trackRideId = document.getElementById('trackRideId');
+        const trackLat = document.getElementById('trackLat');
+        const trackLng = document.getElementById('trackLng');
+        const trackSpeed = document.getElementById('trackSpeed');
+        const trackHeading = document.getElementById('trackHeading');
+        const trackTraffic = document.getElementById('trackTraffic');
+        const trackEta = document.getElementById('trackEta');
+        const trackDistance = document.getElementById('trackDistance');
+        const emitTrackingBtn = document.getElementById('emitTrackingBtn');
+
+        const driverLat = document.getElementById('driverLat');
+        const driverLng = document.getElementById('driverLng');
+        const driverHeading = document.getElementById('driverHeading');
+        const driverSpeed = document.getElementById('driverSpeed');
+        const driverArea = document.getElementById('driverArea');
+        const emitDriverLocBtn = document.getElementById('emitDriverLocBtn');
+
+        // Event logger helper
+        function addLog(type, data, category = 'info') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${category}`;
+            
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'log-time';
+            timeSpan.innerText = `[${new Date().toLocaleTimeString()}] `;
+            entry.appendChild(timeSpan);
+
+            const typeDiv = document.createElement('div');
+            typeDiv.className = 'log-type';
+            typeDiv.innerText = type;
+            entry.appendChild(typeDiv);
+
+            if (data) {
+                const dataDiv = document.createElement('div');
+                dataDiv.className = 'log-data';
+                dataDiv.innerText = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+                entry.appendChild(dataDiv);
+            }
+
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        clearLogsBtn.addEventListener('click', () => {
+            logContainer.innerHTML = '';
+            addLog('Cleared Logs', 'Console cleared.', 'info');
+        });
+
+        // Connection Action
+        connectBtn.addEventListener('click', () => {
+            const url = serverUrlInput.value.trim();
+            const token = tokenInput.value.trim();
+
+            if (!token) {
+                alert('Please provide a JWT Token before connecting.');
+                return;
+            }
+
+            addLog('Connecting...', `Target namespace: ${url}`, 'info');
+
+            // Establish the socket connection with JWT
+            socket = io(url, {
+                auth: {
+                    token: token
+                },
+                transports: ['websocket', 'polling']
+            });
+
+            // Handle connection success
+            socket.on('connect', () => {
+                statusDot.className = 'status-dot connected';
+                statusText.innerText = 'Connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                addLog('Connected', `Session ID: ${socket.id}`, 'received');
+            });
+
+            // Handle connection error
+            socket.on('connect_error', (error) => {
+                statusDot.className = 'status-dot';
+                statusText.innerText = 'Connection Error';
+                addLog('Connection Error', error.message, 'error');
+            });
+
+            // Handle disconnection
+            socket.on('disconnect', (reason) => {
+                statusDot.className = 'status-dot';
+                statusText.innerText = 'Disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                addLog('Disconnected', `Reason: ${reason}`, 'info');
+            });
+
+            // Register global server event listeners
+            const eventsToListen = [
+                'nearby_drivers:update',
+                'ride:offer',
+                'ride:offer:expired',
+                'ride:status:update',
+                'ride:live:update',
+                'ride:route:update',
+                'ride:cancelled',
+                'surge:update',
+                'driver:location:updated'
+            ];
+
+            eventsToListen.forEach(event => {
+                socket.on(event, (data) => {
+                    addLog(`Server Event: ${event}`, data, 'received');
+                });
+            });
+        });
+
+        // Disconnection Action
+        disconnectBtn.addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+            }
+        });
+
+        // Emit Join Ride
+        joinRideBtn.addEventListener('click', () => {
+            if (!socket || !socket.connected) {
+                alert('Please connect to the socket first.');
+                return;
+            }
+            const ride_id = rideIdInput.value.trim();
+            if (!ride_id) {
+                alert('Please enter a Ride ID.');
+                return;
+            }
+
+            const payload = { ride_id };
+            addLog('Emitting ride:join', payload, 'sent');
+            
+            socket.emit('ride:join', payload, (response) => {
+                addLog('ride:join Acknowledgement', response, response.success ? 'received' : 'error');
+            });
+        });
+
+        // Emit Leave Ride
+        leaveRideBtn.addEventListener('click', () => {
+            if (!socket || !socket.connected) {
+                alert('Please connect to the socket first.');
+                return;
+            }
+            const ride_id = rideIdInput.value.trim();
+            if (!ride_id) {
+                alert('Please enter a Ride ID.');
+                return;
+            }
+
+            const payload = { ride_id };
+            addLog('Emitting ride:leave', payload, 'sent');
+            
+            socket.emit('ride:leave', payload, (response) => {
+                addLog('ride:leave Acknowledgement', response, 'received');
+            });
+        });
+
+        // Emit Ride Tracking Update
+        emitTrackingBtn.addEventListener('click', () => {
+            if (!socket || !socket.connected) {
+                alert('Please connect to the socket first.');
+                return;
+            }
+            const ride_id = trackRideId.value.trim();
+            if (!ride_id) {
+                alert('Please enter a Ride ID.');
+                return;
+            }
+
+            const payload = {
+                ride_id,
+                latitude: parseFloat(trackLat.value),
+                longitude: parseFloat(trackLng.value),
+                speed_kmph: parseFloat(trackSpeed.value),
+                heading: parseFloat(trackHeading.value),
+                traffic_level: trackTraffic.value,
+                eta_min: parseInt(trackEta.value),
+                distance_remaining_km: parseFloat(trackDistance.value)
+            };
+
+            addLog('Emitting ride:tracking:update', payload, 'sent');
+            socket.emit('ride:tracking:update', payload);
+        });
+
+        // Emit Driver Location Update
+        emitDriverLocBtn.addEventListener('click', () => {
+            if (!socket || !socket.connected) {
+                alert('Please connect to the socket first.');
+                return;
+            }
+
+            const payload = {
+                latitude: parseFloat(driverLat.value),
+                longitude: parseFloat(driverLng.value),
+                heading: parseFloat(driverHeading.value),
+                speed_kmph: parseFloat(driverSpeed.value),
+                current_area: driverArea.value
+            };
+
+            addLog('Emitting driver:location:update', payload, 'sent');
+            socket.emit('driver:location:update', payload);
+        });
+    </script>
+</body>
+</html>

@@ -5,15 +5,18 @@ import connectMongoDB from "./db/mongodb.js";
 import connectPostgres from "./db/postgres.js";
 import connectNeo4j from "./db/neo4j.js";
 import logger from "./utils/logger.js";
+import { initializeSocket } from "./socket/socket.js";
 
 const startServer = async () => {
     try {
         logger.info("Connecting databases...");
         await Promise.all([connectMongoDB(), connectPostgres(), connectNeo4j()]);
 
-        app.listen(process.env.PORT || 8000, () => {
+        const server = app.listen(process.env.PORT || 8000, () => {
             logger.success(`Server listening on port ${process.env.PORT || 8000}`);
         });
+
+        initializeSocket(server);
     } catch (error) {
         logger.error("Database connection attempt failed\n" + error);
         process.exit(1);
