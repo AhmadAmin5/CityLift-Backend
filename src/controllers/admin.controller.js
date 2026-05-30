@@ -383,12 +383,176 @@ const upsertSurgeZone = asyncHandler(async (req, res) => {
     });
 });
 
+
+// ─── 17.1  GET /admin/ml-models ───────────────────────────────────────
+
+const listMlModels = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    let models = await prisma.mlModel.findMany({
+        orderBy: { createdAt: "desc" }
+    });
+
+    // Auto-seed default model if database is empty
+    if (models.length === 0) {
+        const defaultModel = await prisma.mlModel.create({
+            data: {
+                modelName: "fare_prediction_linear_regression",
+                modelType: "fare_prediction",
+                algorithm: "Linear Regression",
+                version: "v1",
+                metrics: {
+                    mae: 42.5,
+                    rmse: 60.2
+                },
+                artifactPath: "models/fare_prediction_v1.pkl",
+                isActive: true,
+                createdAt: new Date("2026-05-23T10:00:00Z")
+            }
+        });
+        models = [defaultModel];
+    }
+
+    const formattedModels = models.map((model) => ({
+        id: model.id,
+        model_name: model.modelName,
+        model_type: model.modelType,
+        algorithm: model.algorithm,
+        version: model.version,
+        metrics: model.metrics,
+        artifact_path: model.artifactPath,
+        is_active: model.isActive,
+        created_at: model.createdAt
+    }));
+
+    return res.status(200).json({
+        success: true,
+        message: "ML models fetched successfully",
+        data: formattedModels,
+        meta: null
+    });
+});
+
+// ─── 17.2  GET /admin/rides/:ride_id/fare-prediction-logs ──────────────
+
+const getFarePredictionLogs = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { ride_id } = req.params;
+
+    const ride = await prisma.ride.findUnique({
+        where: { id: ride_id },
+        include: {
+            fare: {
+                include: {
+                    pricingRule: true
+                }
+            },
+            vehicle: true
+        }
+    });
+
+    if (!ride) {
+        throw new ApiError(404, "Ride not found");
+    }
+
+    const logs = [];
+
+    if (ride.fare) {
+        const fare = ride.fare;
+        const vehicleType = ride.vehicle?.vehicleType || fare.pricingRule?.vehicleType || "car";
+
+        // Reconstruct model name and version
+        let modelName = "fare_prediction_linear_regression";
+        let modelVersion = "v1";
+        if (fare.modelUsed) {
+            const parts = fare.modelUsed.split("_v");
+            if (parts.length > 1) {
+                modelName = parts[0];
+                modelVersion = "v" + parts[1];
+            } else {
+                modelName = fare.modelUsed;
+            }
+        }
+
+        // Reconstruct pre-ride log
+        const preRideLog = {
+            ride_id: ride.id,
+            prediction_stage: "pre_ride",
+            model_name: modelName,
+            model_version: modelVersion,
+            features: {
+                distance_km: fare.estimatedDistanceKm !== null ? Number(fare.estimatedDistanceKm) : 0,
+                duration_min: fare.estimatedDurationMin !== null ? Number(fare.estimatedDurationMin) : 0,
+                traffic_delay_min: fare.estimatedTrafficDelayMin !== null ? Number(fare.estimatedTrafficDelayMin) : 0,
+                waiting_time_min: 0,
+                surge_multiplier: fare.surgeMultiplier !== null ? Number(fare.surgeMultiplier) : 1.0,
+                peak_multiplier: fare.peakMultiplier !== null ? Number(fare.peakMultiplier) : 1.0,
+                hour_of_day: ride.scheduledPickupAt 
+                    ? new Date(ride.scheduledPickupAt).getUTCHours() 
+                    : new Date(ride.createdAt).getUTCHours(),
+                vehicle_type: vehicleType
+            },
+            predicted_fare: fare.preRideMlPredictedFare !== null ? Number(fare.preRideMlPredictedFare) : 0,
+            actual_final_fare: fare.finalFare !== null ? Number(fare.finalFare) : null,
+            prediction_error: fare.finalFare !== null && fare.preRideMlPredictedFare !== null
+                ? Number((Number(fare.finalFare) - Number(fare.preRideMlPredictedFare)).toFixed(2))
+                : null,
+            created_at: fare.createdAt
+        };
+        logs.push(preRideLog);
+
+        // Reconstruct post-ride log if final ML prediction was calculated (ride completed)
+        if (fare.finalMlPredictedFare !== null) {
+            const postRideLog = {
+                ride_id: ride.id,
+                prediction_stage: "post_ride",
+                model_name: modelName,
+                model_version: modelVersion,
+                features: {
+                    distance_km: fare.actualDistanceKm !== null ? Number(fare.actualDistanceKm) : 0,
+                    duration_min: fare.actualDurationMin !== null ? Number(fare.actualDurationMin) : 0,
+                    traffic_delay_min: fare.actualTrafficDelayMin !== null ? Number(fare.actualTrafficDelayMin) : 0,
+                    waiting_time_min: fare.waitingTimeMin !== null ? Number(fare.waitingTimeMin) : 0,
+                    surge_multiplier: fare.surgeMultiplier !== null ? Number(fare.surgeMultiplier) : 1.0,
+                    peak_multiplier: fare.peakMultiplier !== null ? Number(fare.peakMultiplier) : 1.0,
+                    hour_of_day: fare.finalizedAt 
+                        ? new Date(fare.finalizedAt).getUTCHours() 
+                        : (ride.completedAt ? new Date(ride.completedAt).getUTCHours() : new Date().getUTCHours()),
+                    vehicle_type: vehicleType
+                },
+                predicted_fare: Number(fare.finalMlPredictedFare),
+                actual_final_fare: fare.finalFare !== null ? Number(fare.finalFare) : null,
+                prediction_error: fare.finalFare !== null
+                    ? Number((Number(fare.finalFare) - Number(fare.finalMlPredictedFare)).toFixed(2))
+                    : null,
+                created_at: fare.finalizedAt || ride.completedAt || new Date()
+            };
+            logs.push(postRideLog);
+        }
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: "Fare prediction logs fetched successfully",
+        data: logs,
+        meta: null
+    });
+});
+
 export {
     listPricingRules,
     createPricingRule,
     updatePricingRule,
     reviewDriverDocument,
     updateDriverApproval,
-    upsertSurgeZone
+    upsertSurgeZone,
+    listMlModels,
+    getFarePredictionLogs
 };
+
 

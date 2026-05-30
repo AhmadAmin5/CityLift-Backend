@@ -8,7 +8,9 @@ import {
     updatePricingRule,
     reviewDriverDocument,
     updateDriverApproval,
-    upsertSurgeZone
+    upsertSurgeZone,
+    listMlModels,
+    getFarePredictionLogs
 } from "../controllers/admin.controller.js";
 
 const router = Router();
@@ -33,5 +35,9 @@ router.patch("/driver-documents/:document_id/review", reviewDriverDocument);
 router.patch("/drivers/:driver_id/approval", updateDriverApproval);
 
 router.post("/surge-zones", upsertSurgeZone);
+
+router.get("/ml-models", listMlModels);
+
+router.get("/rides/:ride_id/fare-prediction-logs", getFarePredictionLogs);
 
 export default router;
