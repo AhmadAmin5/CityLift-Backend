@@ -9,7 +9,7 @@ export const registerDriverHandler = (io, socket) => {
     socket.on("driver:location:update", async (payload) => {
         try {
             const user = socket.user;
-            
+
             // Only drivers can update location
             if (!user.driverProfile) return;
 
@@ -42,11 +42,10 @@ export const registerDriverHandler = (io, socket) => {
                 message: "Location updated successfully"
             });
 
-            // Note: Broadcasting nearby_drivers:update to relevant riders 
+            // Note: Broadcasting nearby_drivers:update to relevant riders
             // requires querying nearby active riders or broadcasting to a city room.
             // This logic can be integrated with a geospatial matching service.
             // io.to(`city:${current_area}`).emit("nearby_drivers:update", { ... });
-
         } catch (error) {
             logger.error(`Error in driver:location:update: ${error.message}`);
         }

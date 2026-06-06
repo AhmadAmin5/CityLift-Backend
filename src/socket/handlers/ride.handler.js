@@ -9,7 +9,7 @@ export const registerRideHandler = (io, socket) => {
     socket.on("ride:join", async (payload, callback) => {
         try {
             const { ride_id } = payload;
-            
+
             if (!ride_id) {
                 if (typeof callback === "function") {
                     callback({ success: false, message: "ride_id is required" });

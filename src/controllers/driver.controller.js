@@ -918,7 +918,9 @@ const getDriverCurrentLocation = async (driverId) => {
 };
 
 const buildDriverToPickupFallbackRoute = (origin, pickup, vehicleType = "car") => {
-    const distanceKm = origin ? haversineDistanceKm(origin.latitude, origin.longitude, pickup.latitude, pickup.longitude) : 0;
+    const distanceKm = origin
+        ? haversineDistanceKm(origin.latitude, origin.longitude, pickup.latitude, pickup.longitude)
+        : 0;
 
     const averageSpeedByVehicle = {
         bike: 22,
@@ -949,8 +951,7 @@ const buildDriverToPickupFallbackRoute = (origin, pickup, vehicleType = "car") =
 const buildDriverToPickupRoute = async ({ driverId, pickup, vehicleType = "car" }) => {
     const origin = await getDriverCurrentLocation(driverId);
 
-    const liveRoute =
-        origin && (await getGoogleRouteDirections(origin, pickup, [], vehicleType));
+    const liveRoute = origin && (await getGoogleRouteDirections(origin, pickup, [], vehicleType));
 
     const route = liveRoute || buildDriverToPickupFallbackRoute(origin, pickup, vehicleType);
 
@@ -1091,13 +1092,9 @@ const listMyRideOffers = asyncHandler(async (req, res) => {
         }
     });
 
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            rideOffers.map(serializeRideOffer),
-            "Ride offers fetched successfully"
-        )
-    );
+    return res
+        .status(200)
+        .json(new ApiResponse(200, rideOffers.map(serializeRideOffer), "Ride offers fetched successfully"));
 });
 
 const acceptRideOffer = asyncHandler(async (req, res) => {
@@ -1457,7 +1454,11 @@ const resolveEarningsRange = (period, fromRaw, toRaw) => {
               : startOfUtcDay(now);
 
     const periodEnd =
-        period === "weekly" ? endOfUtcWeek(now) : period === "monthly" ? endOfUtcMonth(now) : endOfUtcDay(now);
+        period === "weekly"
+            ? endOfUtcWeek(now)
+            : period === "monthly"
+              ? endOfUtcMonth(now)
+              : endOfUtcDay(now);
 
     const fromDate = parseDateOnlyUTC(fromRaw, "from");
     const toDate = parseDateOnlyUTC(toRaw, "to");
@@ -1502,7 +1503,9 @@ const getDriverEarningsDashboard = asyncHandler(async (req, res) => {
         throw new ApiError(403, "Only drivers can access this resource");
     }
 
-    const period = String(req.query.period || "daily").trim().toLowerCase();
+    const period = String(req.query.period || "daily")
+        .trim()
+        .toLowerCase();
 
     if (!["daily", "weekly", "monthly"].includes(period)) {
         throw new ApiError(400, "period must be daily, weekly, or monthly");
@@ -1587,7 +1590,9 @@ const getDriverEarningsDashboard = asyncHandler(async (req, res) => {
         bucket.completed_rides += 1;
         bucket.gross_earnings = roundMoney(bucket.gross_earnings + finalFare);
         bucket.estimated_driver_earning = roundMoney(bucket.estimated_driver_earning + finalFare * 0.8);
-        bucket.estimated_platform_commission = roundMoney(bucket.estimated_platform_commission + finalFare * 0.2);
+        bucket.estimated_platform_commission = roundMoney(
+            bucket.estimated_platform_commission + finalFare * 0.2
+        );
 
         totalRides += 1;
         grossEarnings = roundMoney(grossEarnings + finalFare);
@@ -1679,16 +1684,8 @@ const getDriverRatings = asyncHandler(async (req, res) => {
         }
     }));
 
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            data,
-            "Driver ratings fetched successfully"
-        )
-    );
+    return res.status(200).json(new ApiResponse(200, data, "Driver ratings fetched successfully"));
 });
-
-
 
 export {
     getCurrentDriverProfile,

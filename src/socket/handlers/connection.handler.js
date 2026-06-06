@@ -25,7 +25,7 @@ export const registerConnectionHandler = (io, socket) => {
 
     socket.on("disconnect", async () => {
         logger.debug(`Socket disconnected: ${socket.id}`);
-        
+
         // If a driver disconnects, mark them as unavailable in driver locations (optional but good practice)
         if (user.driverProfile) {
             try {

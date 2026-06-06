@@ -10,7 +10,8 @@ import {
     updateDriverApproval,
     upsertSurgeZone,
     listMlModels,
-    getFarePredictionLogs
+    getFarePredictionLogs,
+    listDriverDocuments
 } from "../controllers/admin.controller.js";
 
 const router = Router();
@@ -29,6 +30,8 @@ router.get("/pricing-rules", listPricingRules);
 router.post("/pricing-rules", createPricingRule);
 
 router.patch("/pricing-rules/:pricing_rule_id", updatePricingRule);
+
+router.get("/driver-documents", listDriverDocuments);
 
 router.patch("/driver-documents/:document_id/review", reviewDriverDocument);
 

@@ -626,9 +626,7 @@ const formatRideResponse = ({ ride, requestBody, routeId }) => {
             created_at: stop.createdAt
         }));
 
-    const pickupStop = (ride.stops || []).find(
-        (s) => s.stopType === "pickup" || s.stopOrder === 1
-    );
+    const pickupStop = (ride.stops || []).find((s) => s.stopType === "pickup" || s.stopOrder === 1);
     const dropoffStop = (ride.stops || []).find(
         (s) =>
             s.stopType === "dropoff" ||
@@ -648,14 +646,22 @@ const formatRideResponse = ({ ride, requestBody, routeId }) => {
             longitude: Number(ride.pickupLongitude),
             address: ride.pickupAddress || pickupStop?.address || null,
             provider: pickupStop?.provider || requestBody?.pickup?.provider || null,
-            provider_place_id: ride.pickupProviderPlaceId || pickupStop?.providerPlaceId || requestBody?.pickup?.provider_place_id || null
+            provider_place_id:
+                ride.pickupProviderPlaceId ||
+                pickupStop?.providerPlaceId ||
+                requestBody?.pickup?.provider_place_id ||
+                null
         },
         dropoff: {
             latitude: Number(ride.dropoffLatitude),
             longitude: Number(ride.dropoffLongitude),
             address: ride.dropoffAddress || dropoffStop?.address || null,
             provider: dropoffStop?.provider || requestBody?.dropoff?.provider || null,
-            provider_place_id: ride.dropoffProviderPlaceId || dropoffStop?.providerPlaceId || requestBody?.dropoff?.provider_place_id || null
+            provider_place_id:
+                ride.dropoffProviderPlaceId ||
+                dropoffStop?.providerPlaceId ||
+                requestBody?.dropoff?.provider_place_id ||
+                null
         },
         rider_note_to_driver: ride.riderNoteToDriver,
         status: ride.status,
@@ -749,8 +755,10 @@ const formatListRideResponse = (ride) => {
             ? {
                   currency: ride.fare.currency,
                   final_fare: ride.fare.finalFare === null ? null : Number(ride.fare.finalFare),
-                  estimated_min_fare: ride.fare.estimatedMinFare === null ? null : Number(ride.fare.estimatedMinFare),
-                  estimated_max_fare: ride.fare.estimatedMaxFare === null ? null : Number(ride.fare.estimatedMaxFare)
+                  estimated_min_fare:
+                      ride.fare.estimatedMinFare === null ? null : Number(ride.fare.estimatedMinFare),
+                  estimated_max_fare:
+                      ride.fare.estimatedMaxFare === null ? null : Number(ride.fare.estimatedMaxFare)
               }
             : null,
         driver: ride.driver
@@ -1230,12 +1238,19 @@ const getRideLiveState = asyncHandler(async (req, res) => {
             driver_id: liveStateDoc.driver_id,
             status: liveStateDoc.status,
             current_location: {
-                latitude: liveStateDoc.current_location?.coordinates?.[1] ?? liveStateDoc.current_location?.latitude ?? Number(ride.pickupLatitude),
-                longitude: liveStateDoc.current_location?.coordinates?.[0] ?? liveStateDoc.current_location?.longitude ?? Number(ride.pickupLongitude)
+                latitude:
+                    liveStateDoc.current_location?.coordinates?.[1] ??
+                    liveStateDoc.current_location?.latitude ??
+                    Number(ride.pickupLatitude),
+                longitude:
+                    liveStateDoc.current_location?.coordinates?.[0] ??
+                    liveStateDoc.current_location?.longitude ??
+                    Number(ride.pickupLongitude)
             },
             current_route_id: liveStateDoc.current_route_id || ride.selectedRouteId,
             eta_min: liveStateDoc.eta_min ?? Math.round(ride.fare?.estimatedDurationMin || 0),
-            distance_remaining_km: liveStateDoc.distance_remaining_km ?? Number(ride.fare?.estimatedDistanceKm || 0),
+            distance_remaining_km:
+                liveStateDoc.distance_remaining_km ?? Number(ride.fare?.estimatedDistanceKm || 0),
             updated_at: liveStateDoc.updated_at || liveStateDoc.updatedAt || new Date()
         };
     } else {
@@ -1589,11 +1604,7 @@ const driverStartRide = asyncHandler(async (req, res) => {
             updated_at: startedAt
         };
 
-        await collection.updateOne(
-            { ride_id: ride.id },
-            { $set: doc },
-            { upsert: true }
-        );
+        await collection.updateOne({ ride_id: ride.id }, { $set: doc }, { upsert: true });
 
         liveState = {
             ride_id: doc.ride_id,
@@ -1701,14 +1712,11 @@ const submitTrackingPoint = asyncHandler(async (req, res) => {
         },
         current_route_id: ride.selectedRouteId,
         eta_min: eta_min !== undefined ? Math.round(Number(eta_min)) : null,
-        distance_remaining_km: distance_remaining_km !== undefined ? Number(Number(distance_remaining_km).toFixed(2)) : null,
+        distance_remaining_km:
+            distance_remaining_km !== undefined ? Number(Number(distance_remaining_km).toFixed(2)) : null,
         updated_at: timestamp
     };
-    await liveStateCollection.updateOne(
-        { ride_id: ride.id },
-        { $set: liveStateUpdate },
-        { upsert: true }
-    );
+    await liveStateCollection.updateOne({ ride_id: ride.id }, { $set: liveStateUpdate }, { upsert: true });
 
     await DriverLocation.updateOne(
         { driver_id: driverId },
@@ -1778,10 +1786,7 @@ const getTrackingHistory = asyncHandler(async (req, res) => {
     }
 
     const collection = mongoose.connection.collection("ride_tracking");
-    const points = await collection
-        .find({ ride_id: ride.id })
-        .sort({ timestamp: 1 })
-        .toArray();
+    const points = await collection.find({ ride_id: ride.id }).sort({ timestamp: 1 }).toArray();
 
     return res.status(200).json({
         success: true,
@@ -1862,10 +1867,7 @@ const completeRide = asyncHandler(async (req, res) => {
         )
     );
 
-    const finalMlPredictedFare = Math.max(
-        minimumFare,
-        Math.round(finalFormulaFare - 18)
-    );
+    const finalMlPredictedFare = Math.max(minimumFare, Math.round(finalFormulaFare - 18));
 
     const completedAt = new Date();
 
@@ -2092,23 +2094,25 @@ const submitRating = asyncHandler(async (req, res) => {
 
     if (neo4jDriver) {
         const session = neo4jDriver.session();
-        session.run(
-            `
+        session
+            .run(
+                `
             MATCH (rider:Rider {id: $riderId})
             MATCH (driver:Driver {id: $driverId})
             MERGE (rider)-[rated:RATED]->(driver)
             SET rated.stars = $rating
             `,
-            {
-                riderId,
-                driverId: ride.driverId,
-                rating: parseInt(rating)
-            }
-        ).then(() => session.close())
-         .catch((err) => {
-             logger.warn(`Failed to update Neo4j with rating: ${err.message}`);
-             session.close();
-         });
+                {
+                    riderId,
+                    driverId: ride.driverId,
+                    rating: parseInt(rating)
+                }
+            )
+            .then(() => session.close())
+            .catch((err) => {
+                logger.warn(`Failed to update Neo4j with rating: ${err.message}`);
+                session.close();
+            });
     }
 
     return res.status(201).json({
@@ -2190,7 +2194,9 @@ const getRideReceipt = asyncHandler(async (req, res) => {
     const finalFare = Number(ride.fare?.finalFare || 0);
 
     const pickupStop = (ride.stops || []).find((s) => s.stopType === "pickup" || s.stopOrder === 1);
-    const dropoffStop = (ride.stops || []).find((s) => s.stopType === "dropoff" || s.stopOrder === (ride.stops || []).length);
+    const dropoffStop = (ride.stops || []).find(
+        (s) => s.stopType === "dropoff" || s.stopOrder === (ride.stops || []).length
+    );
 
     const receipt = {
         receipt_number: receiptNumber,

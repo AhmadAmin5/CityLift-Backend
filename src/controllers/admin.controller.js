@@ -315,27 +315,27 @@ const updateDriverApproval = asyncHandler(async (req, res) => {
 // ─── 16.6  POST /admin/surge-zones ────────────────────────────────────
 
 const upsertSurgeZone = asyncHandler(async (req, res) => {
+    const { id, city, area_name, center, radius_km, demand_count, available_drivers, surge_multiplier } =
+        req.body;
 
-    const {
-        id,
-        city,
-        area_name,
-        center,
-        radius_km,
-        demand_count,
-        available_drivers,
-        surge_multiplier
-    } = req.body;
-
-    if (!id || !city || !area_name || !center || !center.latitude || !center.longitude || radius_km === undefined) {
-        throw new ApiError(400, "id, city, area_name, center (latitude, longitude), and radius_km are required");
+    if (
+        !id ||
+        !city ||
+        !area_name ||
+        !center ||
+        !center.latitude ||
+        !center.longitude ||
+        radius_km === undefined
+    ) {
+        throw new ApiError(
+            400,
+            "id, city, area_name, center (latitude, longitude), and radius_km are required"
+        );
     }
 
     const demandVal = demand_count ?? 0;
     const driversVal = available_drivers ?? 0;
-    const supplyDemandRatio = demandVal > 0
-        ? parseFloat((driversVal / demandVal).toFixed(2))
-        : 0;
+    const supplyDemandRatio = demandVal > 0 ? parseFloat((driversVal / demandVal).toFixed(2)) : 0;
 
     const surgeZone = await SurgeZone.findOneAndUpdate(
         { zone_id: id },
@@ -382,7 +382,6 @@ const upsertSurgeZone = asyncHandler(async (req, res) => {
         meta: null
     });
 });
-
 
 // ─── 17.1  GET /admin/ml-models ───────────────────────────────────────
 
@@ -488,20 +487,22 @@ const getFarePredictionLogs = asyncHandler(async (req, res) => {
             features: {
                 distance_km: fare.estimatedDistanceKm !== null ? Number(fare.estimatedDistanceKm) : 0,
                 duration_min: fare.estimatedDurationMin !== null ? Number(fare.estimatedDurationMin) : 0,
-                traffic_delay_min: fare.estimatedTrafficDelayMin !== null ? Number(fare.estimatedTrafficDelayMin) : 0,
+                traffic_delay_min:
+                    fare.estimatedTrafficDelayMin !== null ? Number(fare.estimatedTrafficDelayMin) : 0,
                 waiting_time_min: 0,
                 surge_multiplier: fare.surgeMultiplier !== null ? Number(fare.surgeMultiplier) : 1.0,
                 peak_multiplier: fare.peakMultiplier !== null ? Number(fare.peakMultiplier) : 1.0,
-                hour_of_day: ride.scheduledPickupAt 
-                    ? new Date(ride.scheduledPickupAt).getUTCHours() 
+                hour_of_day: ride.scheduledPickupAt
+                    ? new Date(ride.scheduledPickupAt).getUTCHours()
                     : new Date(ride.createdAt).getUTCHours(),
                 vehicle_type: vehicleType
             },
             predicted_fare: fare.preRideMlPredictedFare !== null ? Number(fare.preRideMlPredictedFare) : 0,
             actual_final_fare: fare.finalFare !== null ? Number(fare.finalFare) : null,
-            prediction_error: fare.finalFare !== null && fare.preRideMlPredictedFare !== null
-                ? Number((Number(fare.finalFare) - Number(fare.preRideMlPredictedFare)).toFixed(2))
-                : null,
+            prediction_error:
+                fare.finalFare !== null && fare.preRideMlPredictedFare !== null
+                    ? Number((Number(fare.finalFare) - Number(fare.preRideMlPredictedFare)).toFixed(2))
+                    : null,
             created_at: fare.createdAt
         };
         logs.push(preRideLog);
@@ -516,20 +517,24 @@ const getFarePredictionLogs = asyncHandler(async (req, res) => {
                 features: {
                     distance_km: fare.actualDistanceKm !== null ? Number(fare.actualDistanceKm) : 0,
                     duration_min: fare.actualDurationMin !== null ? Number(fare.actualDurationMin) : 0,
-                    traffic_delay_min: fare.actualTrafficDelayMin !== null ? Number(fare.actualTrafficDelayMin) : 0,
+                    traffic_delay_min:
+                        fare.actualTrafficDelayMin !== null ? Number(fare.actualTrafficDelayMin) : 0,
                     waiting_time_min: fare.waitingTimeMin !== null ? Number(fare.waitingTimeMin) : 0,
                     surge_multiplier: fare.surgeMultiplier !== null ? Number(fare.surgeMultiplier) : 1.0,
                     peak_multiplier: fare.peakMultiplier !== null ? Number(fare.peakMultiplier) : 1.0,
-                    hour_of_day: fare.finalizedAt 
-                        ? new Date(fare.finalizedAt).getUTCHours() 
-                        : (ride.completedAt ? new Date(ride.completedAt).getUTCHours() : new Date().getUTCHours()),
+                    hour_of_day: fare.finalizedAt
+                        ? new Date(fare.finalizedAt).getUTCHours()
+                        : ride.completedAt
+                          ? new Date(ride.completedAt).getUTCHours()
+                          : new Date().getUTCHours(),
                     vehicle_type: vehicleType
                 },
                 predicted_fare: Number(fare.finalMlPredictedFare),
                 actual_final_fare: fare.finalFare !== null ? Number(fare.finalFare) : null,
-                prediction_error: fare.finalFare !== null
-                    ? Number((Number(fare.finalFare) - Number(fare.finalMlPredictedFare)).toFixed(2))
-                    : null,
+                prediction_error:
+                    fare.finalFare !== null
+                        ? Number((Number(fare.finalFare) - Number(fare.finalMlPredictedFare)).toFixed(2))
+                        : null,
                 created_at: fare.finalizedAt || ride.completedAt || new Date()
             };
             logs.push(postRideLog);
@@ -544,6 +549,25 @@ const getFarePredictionLogs = asyncHandler(async (req, res) => {
     });
 });
 
+// ─── 14.4  GET /admin/driver-documents ────────────────────────────────
+
+const listDriverDocuments = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const documents = await prisma.driverDocument.findMany({
+        orderBy: { uploadedAt: "desc" }
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: "Driver documents fetched successfully",
+        data: documents.map(formatDriverDocument),
+        meta: null
+    });
+});
+
 export {
     listPricingRules,
     createPricingRule,
@@ -552,7 +576,6 @@ export {
     updateDriverApproval,
     upsertSurgeZone,
     listMlModels,
-    getFarePredictionLogs
+    getFarePredictionLogs,
+    listDriverDocuments
 };
-
-

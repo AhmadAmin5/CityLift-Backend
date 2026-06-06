@@ -3198,6 +3198,50 @@ Backend should continue searching for another driver.
 
 ---
 
+### 14.4 List All Driver Documents (Added API)
+
+```http
+GET /admin/driver-documents
+```
+
+Protected admin endpoint.
+
+#### Response 200
+
+```json
+{
+    "success": true,
+    "message": "Driver documents fetched successfully",
+    "data": [
+        {
+            "id": "document_uuid",
+            "driver_id": "driver_uuid",
+            "vehicle_id": null,
+            "document_type": "cnic",
+            "file_url": "https://example.com/uploads/cnic.jpg",
+            "status": "pending",
+            "rejection_reason": null,
+            "uploaded_at": "2026-05-23T10:00:00Z",
+            "verified_at": null
+        },
+        {
+            "id": "document_uuid_2",
+            "driver_id": "driver_uuid",
+            "vehicle_id": "vehicle_uuid",
+            "document_type": "vehicle_registration",
+            "file_url": "https://example.com/uploads/vehicle-registration.jpg",
+            "status": "approved",
+            "rejection_reason": null,
+            "uploaded_at": "2026-05-23T10:00:00Z",
+            "verified_at": "2026-05-23T10:30:00Z"
+        }
+    ],
+    "meta": null
+}
+```
+
+---
+
 ## 15. Driver Earnings and Ratings APIs
 
 ---
