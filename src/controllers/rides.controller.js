@@ -12,6 +12,8 @@ import logger from "../utils/logger.js";
 import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
 import * as rideEstimateService from "../services/rideEstimate.service.js";
 import socketService from "../services/socket.service.js";
+import { getCurrentWeather } from "../services/openWeather.service.js";
+import WeatherUpdate from "../models/weatherUpdate.model.js";
 
 const DEFAULT_CURRENCY = "PKR";
 const DEFAULT_CITY = "Lahore";
@@ -1463,12 +1465,7 @@ const cancelRide = asyncHandler(async (req, res) => {
         req.user.id
     );
 
-    socketService.emitRideCancelled(
-        ride.id,
-        req.user.id,
-        reason,
-        cancellationFee
-    );
+    socketService.emitRideCancelled(ride.id, req.user.id, reason, cancellationFee);
 
     return res.status(200).json({
         success: true,
@@ -1760,6 +1757,41 @@ const submitTrackingPoint = asyncHandler(async (req, res) => {
         throw new ApiError(500, "Database connection not available");
     }
 
+    // Fetch or reuse cached weather data for the ride
+    let weather;
+    try {
+        const oneMinuteAgo = new Date(Date.now() - 60000);
+        const lastWeather = await WeatherUpdate.findOne({ ride_id: ride.id }).sort({ timestamp: -1 }).lean();
+
+        if (lastWeather && lastWeather.timestamp > oneMinuteAgo) {
+            weather = {
+                weather_code: lastWeather.weather_code,
+                rain_mm: lastWeather.rain_mm,
+                visibility_m: lastWeather.visibility_m,
+                wind_speed: lastWeather.wind_speed,
+                feels_like_temp: lastWeather.feels_like_temp
+            };
+        } else {
+            weather = await getCurrentWeather({ latitude, longitude });
+            await WeatherUpdate.create({
+                ride_id: ride.id,
+                latitude: Number(latitude),
+                longitude: Number(longitude),
+                ...weather,
+                timestamp
+            });
+        }
+    } catch (weatherErr) {
+        logger.error(`Error processing weather in REST tracking: ${weatherErr.message}`);
+        weather = {
+            weather_code: 0,
+            rain_mm: 0,
+            visibility_m: 10000,
+            wind_speed: 5,
+            feels_like_temp: 30
+        };
+    }
+
     const trackingCollection = mongoose.connection.collection("ride_tracking");
     const trackingPoint = {
         ride_id: ride.id,
@@ -1771,6 +1803,11 @@ const submitTrackingPoint = asyncHandler(async (req, res) => {
         speed_kmph: Number(speed_kmph),
         heading: Number(heading),
         traffic_level,
+        weather_code: weather.weather_code,
+        rain_mm: weather.rain_mm,
+        visibility_m: weather.visibility_m,
+        wind_speed: weather.wind_speed,
+        feels_like_temp: weather.feels_like_temp,
         timestamp
     };
     await trackingCollection.insertOne(trackingPoint);
@@ -1880,6 +1917,125 @@ const getTrackingHistory = asyncHandler(async (req, res) => {
     });
 });
 
+const calculateActualTripParameters = async (ride, completedAt, fallbackParams) => {
+    let computedDistance = 0;
+    let computedDuration = 0;
+    let computedWaitingTime = 0;
+    let computedTrafficDelay = 0;
+    let hasTelemetry = false;
+
+    if (mongoose.connection.readyState === 1) {
+        const points = await mongoose.connection
+            .collection("ride_tracking")
+            .find({ ride_id: ride.id })
+            .sort({ timestamp: 1 })
+            .toArray();
+
+        if (points && points.length > 0) {
+            hasTelemetry = true;
+
+            // 1. Calculate actual distance using Haversine formula between consecutive points
+            for (let i = 0; i < points.length - 1; i++) {
+                const ptA = points[i];
+                const ptB = points[i + 1];
+                if (
+                    ptA.location?.coordinates &&
+                    ptB.location?.coordinates &&
+                    ptA.location.coordinates.length >= 2 &&
+                    ptB.location.coordinates.length >= 2
+                ) {
+                    const lat1 = ptA.location.coordinates[1];
+                    const lon1 = ptA.location.coordinates[0];
+                    const lat2 = ptB.location.coordinates[1];
+                    const lon2 = ptB.location.coordinates[0];
+                    computedDistance += haversineDistanceKm(lat1, lon1, lat2, lon2);
+                }
+            }
+
+            // 2. Calculate actual duration (elapsed time between startedAt and completedAt)
+            const startTime = ride.startedAt || points[0].timestamp;
+            const durationMs = completedAt.getTime() - new Date(startTime).getTime();
+            computedDuration = Math.round(durationMs / (1000 * 60));
+
+            // 3. Calculate waiting time
+            // a) Initial waiting time at pickup (between arrivedAt and startedAt)
+            let pickupWaitMs = 0;
+            if (ride.arrivedAt && ride.startedAt) {
+                pickupWaitMs = Math.max(
+                    0,
+                    new Date(ride.startedAt).getTime() - new Date(ride.arrivedAt).getTime()
+                );
+            }
+            const pickupWaitMin = Math.round(pickupWaitMs / (1000 * 60));
+
+            // b) Mid-trip waiting time (stationary intervals where speed is very low)
+            let midTripWaitMs = 0;
+            for (let i = 0; i < points.length - 1; i++) {
+                const ptA = points[i];
+                const ptB = points[i + 1];
+                const isStationary =
+                    (ptA.speed_kmph !== undefined && ptA.speed_kmph < 2) ||
+                    (ptB.speed_kmph !== undefined && ptB.speed_kmph < 2);
+                if (isStationary) {
+                    const gapMs = new Date(ptB.timestamp).getTime() - new Date(ptA.timestamp).getTime();
+                    // Ignore gaps longer than 5 mins (e.g. driver lost connection or app killed)
+                    if (gapMs > 0 && gapMs < 5 * 60 * 1000) {
+                        midTripWaitMs += gapMs;
+                    }
+                }
+            }
+            const midTripWaitMin = Math.round(midTripWaitMs / (1000 * 60));
+            computedWaitingTime = pickupWaitMin + midTripWaitMin;
+
+            // 4. Calculate actual traffic delay (moderate/heavy traffic or speed between 2 and 15 kmph)
+            let trafficDelayMs = 0;
+            for (let i = 0; i < points.length - 1; i++) {
+                const ptA = points[i];
+                const ptB = points[i + 1];
+                const isCongested =
+                    ptA.traffic_level === "heavy" ||
+                    ptA.traffic_level === "jam" ||
+                    ptB.traffic_level === "heavy" ||
+                    ptB.traffic_level === "jam" ||
+                    (ptA.speed_kmph >= 2 && ptA.speed_kmph < 15);
+                if (isCongested) {
+                    const gapMs = new Date(ptB.timestamp).getTime() - new Date(ptA.timestamp).getTime();
+                    if (gapMs > 0 && gapMs < 5 * 60 * 1000) {
+                        trafficDelayMs += gapMs;
+                    }
+                }
+            }
+            computedTrafficDelay = Math.round(trafficDelayMs / (1000 * 60));
+        }
+    }
+
+    // Apply fallbacks if no telemetry was found
+    const finalDistance = hasTelemetry
+        ? computedDistance
+        : fallbackParams.actual_distance_km !== undefined
+          ? Number(fallbackParams.actual_distance_km)
+          : Number(ride.fare?.estimatedDistanceKm || 0);
+    const finalDuration = hasTelemetry
+        ? computedDuration
+        : fallbackParams.actual_duration_min !== undefined
+          ? Number(fallbackParams.actual_duration_min)
+          : Number(ride.fare?.estimatedDurationMin || 0);
+    const finalWaitingTime = hasTelemetry
+        ? computedWaitingTime
+        : Number(fallbackParams.waiting_time_min || 0);
+    const finalTrafficDelay = hasTelemetry
+        ? computedTrafficDelay
+        : Number(fallbackParams.actual_traffic_delay_min || 0);
+
+    return {
+        actual_distance_km: Number(Number(finalDistance).toFixed(2)),
+        actual_duration_min: Math.max(1, finalDuration),
+        waiting_time_min: Math.max(0, finalWaitingTime),
+        actual_traffic_delay_min: Math.max(0, finalTrafficDelay),
+        has_telemetry: hasTelemetry
+    };
+};
+
 const completeRide = asyncHandler(async (req, res) => {
     if (!req.user) {
         throw new ApiError(401, "Unauthorized request");
@@ -1893,14 +2049,10 @@ const completeRide = asyncHandler(async (req, res) => {
     const {
         actual_distance_km,
         actual_duration_min,
-        actual_traffic_delay_min = 0,
-        waiting_time_min = 0,
+        actual_traffic_delay_min,
+        waiting_time_min,
         route_changed = false
     } = req.body || {};
-
-    if (actual_distance_km === undefined || actual_duration_min === undefined) {
-        throw new ApiError(400, "actual_distance_km and actual_duration_min are required");
-    }
 
     const driverId = req.user.driverProfile?.id || req.user.driver_profile?.id;
 
@@ -1922,6 +2074,16 @@ const completeRide = asyncHandler(async (req, res) => {
         throw new ApiError(409, `Cannot complete ride from status: ${ride.status}`);
     }
 
+    const completedAt = new Date();
+
+    // Calculate dynamic parameters from telemetry, with fallback to req.body
+    const tripParams = await calculateActualTripParameters(ride, completedAt, {
+        actual_distance_km,
+        actual_duration_min,
+        actual_traffic_delay_min,
+        waiting_time_min
+    });
+
     const baseFare = Number(ride.fare?.baseFare || 100);
     const perKmRate = Number(ride.fare?.perKmRate || 40);
     const perMinRate = Number(ride.fare?.perMinRate || 8);
@@ -1934,17 +2096,15 @@ const completeRide = asyncHandler(async (req, res) => {
         Math.max(
             minimumFare,
             (baseFare +
-                Number(actual_distance_km) * perKmRate +
-                Number(actual_duration_min) * perMinRate +
-                Number(waiting_time_min) * waitingPerMinRate +
-                Number(actual_traffic_delay_min) * trafficDelayPerMinRate) *
+                Number(tripParams.actual_distance_km) * perKmRate +
+                Number(tripParams.actual_duration_min) * perMinRate +
+                Number(tripParams.waiting_time_min) * waitingPerMinRate +
+                Number(tripParams.actual_traffic_delay_min) * trafficDelayPerMinRate) *
                 surgeMultiplier
         )
     );
 
     const finalMlPredictedFare = Math.max(minimumFare, Math.round(finalFormulaFare - 18));
-
-    const completedAt = new Date();
 
     const updatedRide = await prisma.$transaction(async (tx) => {
         const updated = await tx.ride.update({
@@ -1959,10 +2119,10 @@ const completeRide = asyncHandler(async (req, res) => {
             await tx.rideFare.update({
                 where: { id: ride.fare.id },
                 data: {
-                    actualDistanceKm: Number(actual_distance_km),
-                    actualDurationMin: Number(actual_duration_min),
-                    actualTrafficDelayMin: Number(actual_traffic_delay_min),
-                    waitingTimeMin: Number(waiting_time_min),
+                    actualDistanceKm: Number(tripParams.actual_distance_km),
+                    actualDurationMin: Number(tripParams.actual_duration_min),
+                    actualTrafficDelayMin: Number(tripParams.actual_traffic_delay_min),
+                    waitingTimeMin: Number(tripParams.waiting_time_min),
                     finalFormulaFare,
                     finalMlPredictedFare,
                     finalFare: finalFormulaFare,
@@ -2019,10 +2179,10 @@ const completeRide = asyncHandler(async (req, res) => {
                 );
                 await mongoose.connection.collection("ride_summaries").insertOne({
                     ride_id: ride.id,
-                    actual_distance_km: Number(actual_distance_km),
-                    actual_duration_min: Number(actual_duration_min),
-                    actual_traffic_delay_min: Number(actual_traffic_delay_min),
-                    waiting_time_min: Number(waiting_time_min),
+                    actual_distance_km: Number(tripParams.actual_distance_km),
+                    actual_duration_min: Number(tripParams.actual_duration_min),
+                    actual_traffic_delay_min: Number(tripParams.actual_traffic_delay_min),
+                    waiting_time_min: Number(tripParams.waiting_time_min),
                     route_changed,
                     completed_at: completedAt
                 });
@@ -2075,19 +2235,19 @@ const completeRide = asyncHandler(async (req, res) => {
             },
             summary: {
                 ride_id: ride.id,
-                actual_distance_km: Number(actual_distance_km),
-                actual_duration_min: Number(actual_duration_min),
-                actual_traffic_delay_min: Number(actual_traffic_delay_min),
-                waiting_time_min: Number(waiting_time_min),
+                actual_distance_km: Number(tripParams.actual_distance_km),
+                actual_duration_min: Number(tripParams.actual_duration_min),
+                actual_traffic_delay_min: Number(tripParams.actual_traffic_delay_min),
+                waiting_time_min: Number(tripParams.waiting_time_min),
                 route_changed,
                 completed_at: completedAt
             },
             fare: {
                 currency: "PKR",
-                actual_distance_km: Number(actual_distance_km),
-                actual_duration_min: Number(actual_duration_min),
-                actual_traffic_delay_min: Number(actual_traffic_delay_min),
-                waiting_time_min: Number(waiting_time_min),
+                actual_distance_km: Number(tripParams.actual_distance_km),
+                actual_duration_min: Number(tripParams.actual_duration_min),
+                actual_traffic_delay_min: Number(tripParams.actual_traffic_delay_min),
+                waiting_time_min: Number(tripParams.waiting_time_min),
                 final_formula_fare: finalFormulaFare,
                 final_ml_predicted_fare: finalMlPredictedFare,
                 final_fare: finalFormulaFare,

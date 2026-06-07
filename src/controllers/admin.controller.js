@@ -50,12 +50,9 @@ const formatPricingRule = (rule) => ({
     updated_at: rule.updatedAt
 });
 
-
-
 // ─── 16.1  GET /admin/pricing-rules ───────────────────────────────────
 
 const listPricingRules = asyncHandler(async (req, res) => {
-
     const pricingRules = await prisma.pricingRule.findMany({
         orderBy: { createdAt: "desc" }
     });
@@ -73,7 +70,6 @@ const listPricingRules = asyncHandler(async (req, res) => {
 const ALLOWED_VEHICLE_TYPES = ["car", "bike", "rickshaw"];
 
 const createPricingRule = asyncHandler(async (req, res) => {
-
     const {
         city,
         vehicle_type,
@@ -147,7 +143,6 @@ const createPricingRule = asyncHandler(async (req, res) => {
 // ─── 16.3  PATCH /admin/pricing-rules/:pricing_rule_id ────────────────
 
 const updatePricingRule = asyncHandler(async (req, res) => {
-
     const { pricing_rule_id } = req.params;
 
     const existingRule = await prisma.pricingRule.findUnique({
@@ -224,7 +219,6 @@ const formatDriverDocument = (doc) => ({
 });
 
 const reviewDriverDocument = asyncHandler(async (req, res) => {
-
     const { document_id } = req.params;
     const { status, rejection_reason } = req.body;
 
@@ -272,7 +266,6 @@ const reviewDriverDocument = asyncHandler(async (req, res) => {
 const ALLOWED_APPROVAL_STATUSES = ["pending", "approved", "rejected", "suspended"];
 
 const updateDriverApproval = asyncHandler(async (req, res) => {
-
     const { driver_id } = req.params;
     const { approval_status } = req.body;
 

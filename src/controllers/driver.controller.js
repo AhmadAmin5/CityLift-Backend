@@ -5,7 +5,6 @@ import { driver as neo4jDriver } from "../db/neo4j.js";
 import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
 import logger from "../utils/logger.js";
 
-
 import { prisma } from "../db/postgres.js";
 
 import ApiError from "../utils/ApiError.js";
@@ -796,9 +795,7 @@ const setActiveVehicle = asyncHandler(async (req, res) => {
     );
 });
 
-
 // ----------------- Section 14
-
 
 const RIDE_OFFER_COLLECTION = "ride_routes";
 const ALLOWED_RIDE_OFFER_STATUSES = new Set(["sent", "accepted", "declined", "expired"]);
