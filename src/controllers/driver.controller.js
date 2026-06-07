@@ -13,6 +13,7 @@ import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 
 import DriverLocation from "../models/driverLocation.model.js";
+import socketService from "../services/socket.service.js";
 
 import { updateDriverCurrentArea } from "../services/neo4j/driverArea.service.js";
 
@@ -1211,7 +1212,8 @@ const acceptRideOffer = asyncHandler(async (req, res) => {
             driver: updatedDriver,
             offer: updatedOffer,
             ride: updatedRide,
-            activeVehicle
+            activeVehicle,
+            oldRideStatus: offer.ride.status
         };
     });
 
@@ -1247,6 +1249,16 @@ const acceptRideOffer = asyncHandler(async (req, res) => {
             }
         });
     });
+
+    // Emit Socket.IO status update
+    socketService.emitRideStatusUpdate(
+        result.ride.id,
+        result.ride.riderId,
+        result.driver.id,
+        result.oldRideStatus,
+        "accepted",
+        user.id
+    );
 
     return res.status(200).json(
         new ApiResponse(
@@ -1684,7 +1696,19 @@ const getDriverRatings = asyncHandler(async (req, res) => {
         }
     }));
 
-    return res.status(200).json(new ApiResponse(200, data, "Driver ratings fetched successfully"));
+    const totalPages = Math.ceil(total / limit);
+
+    return res.status(200).json({
+        success: true,
+        message: "Driver ratings fetched successfully",
+        data,
+        meta: {
+            page,
+            limit,
+            total,
+            total_pages: totalPages
+        }
+    });
 });
 
 export {

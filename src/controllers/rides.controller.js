@@ -11,6 +11,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import logger from "../utils/logger.js";
 import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
 import * as rideEstimateService from "../services/rideEstimate.service.js";
+import socketService from "../services/socket.service.js";
 
 const DEFAULT_CURRENCY = "PKR";
 const DEFAULT_CITY = "Lahore";
@@ -959,10 +960,47 @@ const createRideRequest = asyncHandler(async (req, res) => {
             },
             include: {
                 stops: true,
-                fare: true
+                fare: true,
+                offers: true
             }
         });
     });
+
+    // Notify drivers via Socket.IO
+    if (Array.isArray(createdRide.offers)) {
+        createdRide.offers.forEach((offer) => {
+            const socketOffer = {
+                id: offer.id,
+                ride_id: offer.rideId,
+                driver_id: offer.driverId,
+                status: offer.status,
+                distance_to_pickup_km: Number(offer.distanceToPickupKm || 0),
+                driver_rating_at_offer: Number(offer.driverRatingAtOffer || 4.8),
+                offered_at: offer.offeredAt,
+                expires_at: offer.expiresAt,
+                ride: {
+                    id: createdRide.id,
+                    pickup: {
+                        latitude: Number(createdRide.pickupLatitude),
+                        longitude: Number(createdRide.pickupLongitude),
+                        address: createdRide.pickupAddress || null
+                    },
+                    dropoff: {
+                        latitude: Number(createdRide.dropoffLatitude),
+                        longitude: Number(createdRide.dropoffLongitude),
+                        address: createdRide.dropoffAddress || null
+                    },
+                    estimated_fare: {
+                        currency: createdRide.fare.currency,
+                        estimated_min_fare: Number(createdRide.fare.estimatedMinFare || 0),
+                        estimated_max_fare: Number(createdRide.fare.estimatedMaxFare || 0)
+                    },
+                    rider_note_to_driver: createdRide.riderNoteToDriver || null
+                }
+            };
+            socketService.emitRideOffer(offer.driverId, socketOffer);
+        });
+    }
 
     const routeForResponse = {
         ...quote.routePreview,
@@ -1415,6 +1453,23 @@ const cancelRide = asyncHandler(async (req, res) => {
         logger.warn(`Side-effects after cancellation failed: ${err.message}`);
     });
 
+    // Emit Socket.IO events for cancellation
+    socketService.emitRideStatusUpdate(
+        ride.id,
+        ride.riderId,
+        ride.driverId,
+        ride.status,
+        "cancelled",
+        req.user.id
+    );
+
+    socketService.emitRideCancelled(
+        ride.id,
+        req.user.id,
+        reason,
+        cancellationFee
+    );
+
     return res.status(200).json({
         success: true,
         message: "Ride cancelled successfully",
@@ -1509,6 +1564,16 @@ const driverArrived = asyncHandler(async (req, res) => {
             { upsert: true }
         );
     }
+
+    // Emit Socket.IO status update
+    socketService.emitRideStatusUpdate(
+        ride.id,
+        ride.riderId,
+        ride.driverId,
+        ride.status,
+        "arrived",
+        req.user.id
+    );
 
     return res.status(200).json({
         success: true,
@@ -1621,6 +1686,16 @@ const driverStartRide = asyncHandler(async (req, res) => {
             updated_at: doc.updated_at
         };
     }
+
+    // Emit Socket.IO status update
+    socketService.emitRideStatusUpdate(
+        ride.id,
+        ride.riderId,
+        ride.driverId,
+        ride.status,
+        "started",
+        req.user.id
+    );
 
     return res.status(200).json({
         success: true,
@@ -1978,6 +2053,16 @@ const completeRide = asyncHandler(async (req, res) => {
     ]).catch((err) => {
         logger.warn(`Side-effects after completion failed: ${err.message}`);
     });
+
+    // Emit Socket.IO status update
+    socketService.emitRideStatusUpdate(
+        ride.id,
+        ride.riderId,
+        ride.driverId,
+        ride.status,
+        "completed",
+        req.user.id
+    );
 
     return res.status(200).json({
         success: true,
