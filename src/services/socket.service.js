@@ -133,6 +133,25 @@ class SocketService {
         };
         nsp.to(`city:${city}`).emit("surge:update", payload);
     }
+    /**
+     * Server Event: Ride Completed
+     */
+    emitRideCompleted(rideId, riderId, driverId, fareData) {
+        const nsp = this.getNamespace();
+        if (!nsp) return;
+
+        const payload = {
+            ride_id: rideId,
+            final_fare: fareData.final_fare,
+            price_breakdown: fareData.price_breakdown,
+            currency: fareData.currency || "PKR",
+            completed_at: new Date().toISOString()
+        };
+
+        nsp.to(`ride:${rideId}`).emit("ride:completed", payload);
+        if (riderId) nsp.to(`rider:${riderId}`).emit("ride:completed", payload);
+        if (driverId) nsp.to(`driver:${driverId}`).emit("ride:completed", payload);
+    }
 }
 
 export default new SocketService();

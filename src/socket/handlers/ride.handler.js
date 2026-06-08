@@ -2,6 +2,7 @@ import logger from "../../utils/logger.js";
 import { prisma } from "../../db/postgres.js";
 import mongoose from "mongoose";
 import { getCurrentWeather } from "../../services/openWeather.service.js";
+import { getDemandSupplyForPickup } from "../../services/demandSupply.service.js";
 import DriverLocation from "../../models/driverLocation.model.js";
 import WeatherUpdate from "../../models/weatherUpdate.model.js";
 
@@ -118,6 +119,41 @@ export const registerRideHandler = (io, socket) => {
                 };
             }
 
+            // Fetch or reuse cached demand/supply data for the ride
+            let demandSupply;
+            try {
+                const twoMinutesAgo = new Date(Date.now() - 120000);
+                const trackingCollection = mongoose.connection.collection("ride_tracking");
+                const lastTracking = await trackingCollection.findOne(
+                    { ride_id: ride.id },
+                    { sort: { timestamp: -1 } }
+                );
+
+                if (
+                    lastTracking &&
+                    lastTracking.timestamp > twoMinutesAgo &&
+                    lastTracking.demand_ratio !== undefined &&
+                    lastTracking.zone_driver_count !== undefined
+                ) {
+                    demandSupply = {
+                        demand_ratio: lastTracking.demand_ratio,
+                        zone_driver_count: lastTracking.zone_driver_count
+                    };
+                } else {
+                    const dsResult = await getDemandSupplyForPickup({ latitude, longitude });
+                    demandSupply = {
+                        demand_ratio: dsResult.demand_ratio,
+                        zone_driver_count: dsResult.zone_driver_count
+                    };
+                }
+            } catch (dsErr) {
+                logger.error(`Error processing demand/supply in socket tracking: ${dsErr.message}`);
+                demandSupply = {
+                    demand_ratio: 1.0,
+                    zone_driver_count: 1
+                };
+            }
+
             // Save to ride_tracking MongoDB collection
             if (mongoose.connection.readyState === 1) {
                 const trackingCollection = mongoose.connection.collection("ride_tracking");
@@ -136,6 +172,8 @@ export const registerRideHandler = (io, socket) => {
                     visibility_m: weather.visibility_m,
                     wind_speed: weather.wind_speed,
                     feels_like_temp: weather.feels_like_temp,
+                    demand_ratio: demandSupply.demand_ratio,
+                    zone_driver_count: demandSupply.zone_driver_count,
                     timestamp
                 });
 

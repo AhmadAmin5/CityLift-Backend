@@ -13,6 +13,8 @@ import { getGoogleRouteDirections } from "../services/googleRoutes.service.js";
 import * as rideEstimateService from "../services/rideEstimate.service.js";
 import socketService from "../services/socket.service.js";
 import { getCurrentWeather } from "../services/openWeather.service.js";
+import { getDemandSupplyForPickup } from "../services/demandSupply.service.js";
+import { calculateFinalFare } from "../services/finalFare.service.js";
 import WeatherUpdate from "../models/weatherUpdate.model.js";
 
 const DEFAULT_CURRENCY = "PKR";
@@ -937,6 +939,12 @@ const createRideRequest = asyncHandler(async (req, res) => {
                         preRideFormulaFare: quote.fare.pre_ride_formula_fare,
                         estimatedMinFare: quote.fare.estimated_min_fare,
                         estimatedMaxFare: quote.fare.estimated_max_fare,
+                        baseFare: quote.pricingRule.baseFare,
+                        perKmRate: quote.pricingRule.perKmRate,
+                        perMinRate: quote.pricingRule.perMinRate,
+                        waitingPerMinRate: quote.pricingRule.waitingPerMinRate,
+                        trafficDelayPerMinRate: quote.pricingRule.trafficDelayPerMinRate,
+                        minimumFare: quote.pricingRule.minimumFare,
                         peakMultiplier: quote.peakMultiplier,
                         surgeMultiplier: quote.surgeContext.surgeMultiplier,
                         cancellationFee: 0,
@@ -1792,6 +1800,40 @@ const submitTrackingPoint = asyncHandler(async (req, res) => {
         };
     }
 
+    let demandSupply;
+    try {
+        const twoMinutesAgo = new Date(Date.now() - 120000);
+        const trackingCollection = mongoose.connection.collection("ride_tracking");
+        const lastTracking = await trackingCollection.findOne(
+            { ride_id: ride.id },
+            { sort: { timestamp: -1 } }
+        );
+
+        if (
+            lastTracking &&
+            lastTracking.timestamp > twoMinutesAgo &&
+            lastTracking.demand_ratio !== undefined &&
+            lastTracking.zone_driver_count !== undefined
+        ) {
+            demandSupply = {
+                demand_ratio: lastTracking.demand_ratio,
+                zone_driver_count: lastTracking.zone_driver_count
+            };
+        } else {
+            const dsResult = await getDemandSupplyForPickup({ latitude, longitude });
+            demandSupply = {
+                demand_ratio: dsResult.demand_ratio,
+                zone_driver_count: dsResult.zone_driver_count
+            };
+        }
+    } catch (dsErr) {
+        logger.error(`Error processing demand/supply in REST tracking: ${dsErr.message}`);
+        demandSupply = {
+            demand_ratio: 1.0,
+            zone_driver_count: 1
+        };
+    }
+
     const trackingCollection = mongoose.connection.collection("ride_tracking");
     const trackingPoint = {
         ride_id: ride.id,
@@ -1808,6 +1850,8 @@ const submitTrackingPoint = asyncHandler(async (req, res) => {
         visibility_m: weather.visibility_m,
         wind_speed: weather.wind_speed,
         feels_like_temp: weather.feels_like_temp,
+        demand_ratio: demandSupply.demand_ratio,
+        zone_driver_count: demandSupply.zone_driver_count,
         timestamp
     };
     await trackingCollection.insertOne(trackingPoint);
@@ -2058,7 +2102,10 @@ const completeRide = asyncHandler(async (req, res) => {
 
     const ride = await prisma.ride.findUnique({
         where: { id: ride_id },
-        include: { fare: true }
+        include: {
+            fare: true,
+            vehicle: true
+        }
     });
 
     if (!ride) {
@@ -2084,27 +2131,12 @@ const completeRide = asyncHandler(async (req, res) => {
         waiting_time_min
     });
 
-    const baseFare = Number(ride.fare?.baseFare || 100);
-    const perKmRate = Number(ride.fare?.perKmRate || 40);
-    const perMinRate = Number(ride.fare?.perMinRate || 8);
-    const waitingPerMinRate = Number(ride.fare?.waitingPerMinRate || 5);
-    const trafficDelayPerMinRate = Number(ride.fare?.trafficDelayPerMinRate || 4);
-    const surgeMultiplier = Number(ride.fare?.surgeMultiplier || 1.0);
-    const minimumFare = Number(ride.fare?.minimumFare || 250);
-
-    const finalFormulaFare = Math.round(
-        Math.max(
-            minimumFare,
-            (baseFare +
-                Number(tripParams.actual_distance_km) * perKmRate +
-                Number(tripParams.actual_duration_min) * perMinRate +
-                Number(tripParams.waiting_time_min) * waitingPerMinRate +
-                Number(tripParams.actual_traffic_delay_min) * trafficDelayPerMinRate) *
-                surgeMultiplier
-        )
-    );
-
-    const finalMlPredictedFare = Math.max(minimumFare, Math.round(finalFormulaFare - 18));
+    // Calculate final fare using the new ML service
+    const finalFareResult = await calculateFinalFare({
+        ride,
+        tripParams,
+        vehicleType: ride.vehicle?.vehicleType || "car"
+    });
 
     const updatedRide = await prisma.$transaction(async (tx) => {
         const updated = await tx.ride.update({
@@ -2123,9 +2155,11 @@ const completeRide = asyncHandler(async (req, res) => {
                     actualDurationMin: Number(tripParams.actual_duration_min),
                     actualTrafficDelayMin: Number(tripParams.actual_traffic_delay_min),
                     waitingTimeMin: Number(tripParams.waiting_time_min),
-                    finalFormulaFare,
-                    finalMlPredictedFare,
-                    finalFare: finalFormulaFare,
+                    finalFormulaFare: finalFareResult.final_formula_fare,
+                    finalMlPredictedFare: finalFareResult.final_ml_predicted_fare,
+                    finalFare: finalFareResult.final_fare,
+                    modelUsed: finalFareResult.model_used,
+                    surgeMultiplier: finalFareResult.surge_multiplier,
                     finalizedAt: completedAt
                 }
             });
@@ -2186,6 +2220,11 @@ const completeRide = asyncHandler(async (req, res) => {
                     route_changed,
                     completed_at: completedAt
                 });
+                await mongoose.connection.collection("ride_fare_breakdowns").insertOne({
+                    ride_id: ride.id,
+                    ...finalFareResult.breakdown,
+                    created_at: completedAt
+                });
             }
         })(),
         (async () => {
@@ -2202,7 +2241,7 @@ const completeRide = asyncHandler(async (req, res) => {
                         {
                             driverId,
                             rideId: ride.id,
-                            finalFare: finalFormulaFare
+                            finalFare: finalFareResult.final_fare
                         }
                     );
                 } finally {
@@ -2214,7 +2253,7 @@ const completeRide = asyncHandler(async (req, res) => {
         logger.warn(`Side-effects after completion failed: ${err.message}`);
     });
 
-    // Emit Socket.IO status update
+    // Emit Socket.IO status update & ride completion
     socketService.emitRideStatusUpdate(
         ride.id,
         ride.riderId,
@@ -2223,6 +2262,12 @@ const completeRide = asyncHandler(async (req, res) => {
         "completed",
         req.user.id
     );
+
+    socketService.emitRideCompleted(ride.id, ride.riderId, ride.driverId, {
+        final_fare: finalFareResult.final_fare,
+        price_breakdown: finalFareResult.breakdown,
+        currency: ride.fare?.currency || "PKR"
+    });
 
     return res.status(200).json({
         success: true,
@@ -2243,15 +2288,16 @@ const completeRide = asyncHandler(async (req, res) => {
                 completed_at: completedAt
             },
             fare: {
-                currency: "PKR",
+                currency: ride.fare?.currency || "PKR",
                 actual_distance_km: Number(tripParams.actual_distance_km),
                 actual_duration_min: Number(tripParams.actual_duration_min),
                 actual_traffic_delay_min: Number(tripParams.actual_traffic_delay_min),
                 waiting_time_min: Number(tripParams.waiting_time_min),
-                final_formula_fare: finalFormulaFare,
-                final_ml_predicted_fare: finalMlPredictedFare,
-                final_fare: finalFormulaFare,
-                model_used: ride.fare?.modelUsed || "fare_prediction_linear_regression_v1",
+                final_formula_fare: finalFareResult.final_formula_fare,
+                final_ml_predicted_fare: finalFareResult.final_ml_predicted_fare,
+                final_fare: finalFareResult.final_fare,
+                model_used: finalFareResult.model_used,
+                price_breakdown: finalFareResult.breakdown,
                 finalized_at: completedAt
             }
         },
@@ -2418,25 +2464,74 @@ const getRideReceipt = asyncHandler(async (req, res) => {
     const suffix = ride.id.slice(-4).toUpperCase();
     const receiptNumber = `RCPT-${dateStr}-${suffix}`;
 
-    const baseFare = Number(ride.fare?.baseFare || 0);
-    const perKmRate = Number(ride.fare?.perKmRate || 0);
-    const perMinRate = Number(ride.fare?.perMinRate || 0);
-    const waitingPerMinRate = Number(ride.fare?.waitingPerMinRate || 0);
-    const trafficDelayPerMinRate = Number(ride.fare?.trafficDelayPerMinRate || 0);
-    const peakMultiplier = Number(ride.fare?.peakMultiplier || 1.0);
-    const surgeMultiplier = Number(ride.fare?.surgeMultiplier || 1.0);
-    const minimumFare = Number(ride.fare?.minimumFare || 0);
+    let fareBreakdown = null;
+    try {
+        if (mongoose.connection.readyState === 1) {
+            fareBreakdown = await mongoose.connection
+                .collection("ride_fare_breakdowns")
+                .findOne({ ride_id: ride.id });
+        }
+    } catch (err) {
+        logger.error(`[RECEIPT] Error fetching fare breakdown from MongoDB: ${err.message}`);
+    }
+
+    if (fareBreakdown) {
+        delete fareBreakdown._id;
+        delete fareBreakdown.ride_id;
+        delete fareBreakdown.created_at;
+    } else {
+        // Fallback for older rides
+        const baseFare = Number(ride.fare?.baseFare || 0);
+        const perKmRate = Number(ride.fare?.perKmRate || 0);
+        const perMinRate = Number(ride.fare?.perMinRate || 0);
+        const waitingPerMinRate = Number(ride.fare?.waitingPerMinRate || 0);
+        const trafficDelayPerMinRate = Number(ride.fare?.trafficDelayPerMinRate || 0);
+        const peakMultiplier = Number(ride.fare?.peakMultiplier || 1.0);
+        const surgeMultiplier = Number(ride.fare?.surgeMultiplier || 1.0);
+        const minimumFare = Number(ride.fare?.minimumFare || 0);
+
+        const actualDistanceKm = Number(ride.fare?.actualDistanceKm || 0);
+        const actualDurationMin = Number(ride.fare?.actualDurationMin || 0);
+        const actualTrafficDelayMin = Number(ride.fare?.actualTrafficDelayMin || 0);
+        const waitingTimeMin = Number(ride.fare?.waitingTimeMin || 0);
+
+        const distanceFare = Math.round(actualDistanceKm * perKmRate);
+        const durationFare = Math.round(actualDurationMin * perMinRate);
+        const waitingFare = Math.round(waitingTimeMin * waitingPerMinRate);
+        const trafficDelayFare = Math.round(actualTrafficDelayMin * trafficDelayPerMinRate);
+        const subtotal = baseFare + distanceFare + durationFare + waitingFare + trafficDelayFare;
+        const peakAmount = Math.round(subtotal * (peakMultiplier - 1));
+        const surgeAmount = Math.round((subtotal + peakAmount) * (surgeMultiplier - 1));
+        const preAdjustmentTotal = Math.round(Math.max(minimumFare, subtotal + peakAmount + surgeAmount));
+        const finalFare = Number(ride.fare?.finalFare || preAdjustmentTotal);
+
+        fareBreakdown = {
+            base_fare: baseFare,
+            distance_fare: { rate: perKmRate, distance_km: actualDistanceKm, amount: distanceFare },
+            duration_fare: { rate: perMinRate, duration_min: actualDurationMin, amount: durationFare },
+            waiting_fare: { rate: waitingPerMinRate, waiting_min: waitingTimeMin, amount: waitingFare },
+            traffic_delay_fare: {
+                rate: trafficDelayPerMinRate,
+                delay_min: actualTrafficDelayMin,
+                amount: trafficDelayFare
+            },
+            subtotal,
+            peak_multiplier: peakMultiplier,
+            peak_amount: peakAmount,
+            surge_multiplier: surgeMultiplier,
+            surge_amount: surgeAmount,
+            pre_adjustment_total: preAdjustmentTotal,
+            threshold_adjustment: Math.round(preAdjustmentTotal - finalFare),
+            final_fare: finalFare,
+            estimated_fare: Number(
+                ride.fare?.preRideMlPredictedFare || ride.fare?.preRideFormulaFare || minimumFare
+            ),
+            currency: ride.fare?.currency || "PKR"
+        };
+    }
 
     const actualDistanceKm = Number(ride.fare?.actualDistanceKm || 0);
     const actualDurationMin = Number(ride.fare?.actualDurationMin || 0);
-    const actualTrafficDelayMin = Number(ride.fare?.actualTrafficDelayMin || 0);
-    const waitingTimeMin = Number(ride.fare?.waitingTimeMin || 0);
-
-    const distanceFare = Math.round(actualDistanceKm * perKmRate);
-    const durationFare = Math.round(actualDurationMin * perMinRate);
-    const waitingFare = Math.round(waitingTimeMin * waitingPerMinRate);
-    const trafficDelayFare = Math.round(actualTrafficDelayMin * trafficDelayPerMinRate);
-    const finalFare = Number(ride.fare?.finalFare || 0);
 
     const pickupStop = (ride.stops || []).find((s) => s.stopType === "pickup" || s.stopOrder === 1);
     const dropoffStop = (ride.stops || []).find(
@@ -2473,17 +2568,7 @@ const getRideReceipt = asyncHandler(async (req, res) => {
             latitude: Number(ride.dropoffLatitude),
             longitude: Number(ride.dropoffLongitude)
         },
-        fare_breakdown: {
-            base_fare: baseFare,
-            distance_fare: distanceFare,
-            duration_fare: durationFare,
-            waiting_fare: waitingFare,
-            traffic_delay_fare: trafficDelayFare,
-            peak_multiplier: peakMultiplier,
-            surge_multiplier: surgeMultiplier,
-            minimum_fare: minimumFare,
-            final_fare: finalFare
-        },
+        fare_breakdown: fareBreakdown,
         actual_distance_km: actualDistanceKm,
         actual_duration_min: actualDurationMin,
         completed_at: completedAt,
