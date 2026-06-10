@@ -456,7 +456,7 @@ const buildRideQuote = async ({
     };
 };
 
-const getMatchingDrivers = async ({ pickup, vehicleType }) => {
+const getMatchingDrivers = async ({ pickup, vehicleType, riderId = null, pickupAreaName = null }) => {
     let nearbyLocations = [];
 
     try {
@@ -532,11 +532,11 @@ const getMatchingDrivers = async ({ pickup, vehicleType }) => {
     }
 
     const driverMap = new Map(drivers.map((driver) => [driver.id, driver]));
-    const orderedDrivers = orderedIds.length
+    let orderedDrivers = orderedIds.length
         ? orderedIds.map((id) => driverMap.get(id)).filter(Boolean)
         : drivers;
 
-    return orderedDrivers.slice(0, MATCHING_LIMIT).map((driver) => {
+    const driverDetails = orderedDrivers.map((driver) => {
         const locationDoc = locationMap.get(driver.id);
         const distanceToPickupKm = locationDoc
             ? haversineDistanceKm(
@@ -545,14 +545,82 @@ const getMatchingDrivers = async ({ pickup, vehicleType }) => {
                   locationDoc.location.coordinates[1],
                   locationDoc.location.coordinates[0]
               )
-            : null;
+            : 0;
 
         return {
             driver,
             distanceToPickupKm,
-            driverRatingAtOffer: Number(driver.averageRating)
+            driverRatingAtOffer: Number(driver.averageRating),
+            effectiveDistanceKm: distanceToPickupKm,
+            stars: 0,
+            completedCount: 0
         };
     });
+
+    if (neo4jDriver && riderId && pickupAreaName && driverDetails.length > 0) {
+        const driverIds = driverDetails.map((d) => d.driver.id);
+        const session = neo4jDriver.session();
+        try {
+            const result = await session.run(
+                `
+                MATCH (d:Driver)
+                WHERE d.id IN $driverIds
+                OPTIONAL MATCH (rider:Rider {id: $riderId})-[rate:RATED]->(d)
+                WITH d, rate.stars AS stars
+                OPTIONAL MATCH (d)-[:COMPLETED]->(ride:Ride)-[:PICKUP_IN]->(a:Area {name: $pickupAreaName})
+                WITH d, stars, count(ride) AS completedCount
+                RETURN d.id AS driver_id, COALESCE(stars, 0) AS stars, completedCount AS completed_count
+                `,
+                {
+                    driverIds,
+                    riderId,
+                    pickupAreaName
+                }
+            );
+
+            const neo4jDataMap = new Map();
+            result.records.forEach((record) => {
+                const driverId = record.get("driver_id");
+                let stars = record.get("stars");
+                let completedCount = record.get("completed_count");
+
+                if (stars && typeof stars.toNumber === "function") stars = stars.toNumber();
+                if (completedCount && typeof completedCount.toNumber === "function") completedCount = completedCount.toNumber();
+                if (typeof stars === "object" && "low" in stars) stars = Number(stars.low);
+                if (typeof completedCount === "object" && "low" in completedCount) completedCount = Number(completedCount.low);
+
+                neo4jDataMap.set(driverId, {
+                    stars: Number(stars || 0),
+                    completedCount: Number(completedCount || 0)
+                });
+            });
+
+            driverDetails.forEach((detail) => {
+                const graphMetrics = neo4jDataMap.get(detail.driver.id);
+                if (graphMetrics) {
+                    detail.stars = graphMetrics.stars;
+                    detail.completedCount = graphMetrics.completedCount;
+
+                    const ratingBoost = graphMetrics.stars === 5 ? 2.0 : 0.0;
+                    const areaCompletionBoost = Math.min(1.5, graphMetrics.completedCount * 0.15);
+
+                    detail.effectiveDistanceKm = Math.max(0, detail.distanceToPickupKm - ratingBoost - areaCompletionBoost);
+                }
+            });
+
+            driverDetails.sort((a, b) => a.effectiveDistanceKm - b.effectiveDistanceKm);
+        } catch (err) {
+            logger.warn(`Neo4j matching graph boost query failed: ${err.message}`);
+        } finally {
+            await session.close();
+        }
+    }
+
+    return driverDetails.slice(0, MATCHING_LIMIT).map((detail) => ({
+        driver: detail.driver,
+        distanceToPickupKm: detail.distanceToPickupKm,
+        driverRatingAtOffer: detail.driverRatingAtOffer
+    }));
 };
 
 const persistRideRouteToMongo = async ({ route, rideId, pickup, dropoff, stops, vehicleType }) => {
@@ -853,7 +921,9 @@ const createRideRequest = asyncHandler(async (req, res) => {
 
     const matchingDrivers = await getMatchingDrivers({
         pickup: normalizedPickup,
-        vehicleType: normalizedVehicleType
+        vehicleType: normalizedVehicleType,
+        riderId: req.user.riderProfile?.id || req.user.rider_profile?.id,
+        pickupAreaName: quote.surgeContext.surgeZoneName || DEFAULT_CITY
     });
 
     const createdRide = await prisma.$transaction(async (tx) => {
@@ -1122,6 +1192,62 @@ const listMyRides = asyncHandler(async (req, res) => {
     }
     if (ride_type) {
         whereClause.rideType = ride_type;
+    }
+
+    let rideIds = null;
+    let queryFailed = false;
+
+    if (neo4jDriver) {
+        const session = neo4jDriver.session();
+        try {
+            let result;
+            const queryStatus = status || null;
+            if (req.user.role === "rider") {
+                result = await session.run(
+                    `
+                    MATCH (r:Rider {id: $profileId})-[:REQUESTED]->(ride:Ride)
+                    WHERE $status IS NULL OR ride.status = $status
+                    RETURN ride.id AS ride_id
+                    `,
+                    { profileId, status: queryStatus }
+                );
+            } else if (req.user.role === "driver") {
+                result = await session.run(
+                    `
+                    MATCH (d:Driver {id: $profileId})-[:ACCEPTED]->(ride:Ride)
+                    WHERE $status IS NULL OR ride.status = $status
+                    RETURN ride.id AS ride_id
+                    `,
+                    { profileId, status: queryStatus }
+                );
+            }
+
+            if (result) {
+                rideIds = result.records.map((record) => record.get("ride_id"));
+            }
+        } catch (err) {
+            queryFailed = true;
+            logger.warn(`Neo4j query failed in listMyRides: ${err.message}`);
+        } finally {
+            await session.close();
+        }
+    }
+
+    if (rideIds !== null && !queryFailed) {
+        if (rideIds.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: "Rides fetched successfully",
+                data: [],
+                meta: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: 0,
+                    total_pages: 0
+                }
+            });
+        }
+        whereClause.id = { in: rideIds };
     }
 
     const [total, rides] = await Promise.all([

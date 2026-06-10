@@ -3627,6 +3627,99 @@ Useful for demo setup. Real system may calculate these automatically.
 
 ---
 
+### 16.7 List Pending Vehicles (Added API)
+
+```http
+GET /admin/vehicles/pending
+```
+
+Protected admin endpoint.
+
+#### Response 200
+
+```json
+{
+    "success": true,
+    "message": "Pending vehicles fetched successfully",
+    "data": [
+        {
+            "id": "vehicle_uuid",
+            "driver_id": "driver_uuid",
+            "make": "Honda",
+            "model": "Civic",
+            "year": 2022,
+            "plate_number": "ABC-1234",
+            "color": "Black",
+            "vehicle_type": "car",
+            "is_active": false,
+            "verification_status": "pending",
+            "created_at": "2026-06-10T18:41:22.064Z",
+            "updated_at": "2026-06-10T18:41:22.064Z",
+            "documents": [
+                {
+                    "id": "document_uuid",
+                    "driver_id": "driver_uuid",
+                    "vehicle_id": "vehicle_uuid",
+                    "document_type": "vehicle_registration",
+                    "file_url": "https://example.com/uploads/vehicle-registration.pdf",
+                    "status": "pending",
+                    "rejection_reason": null,
+                    "uploaded_at": "2026-06-10T18:41:22.176Z",
+                    "verified_at": null
+                }
+            ]
+        }
+    ],
+    "meta": null
+}
+```
+
+---
+
+### 16.8 Verify Vehicle (Added API)
+
+```http
+PATCH /admin/vehicles/:vehicle_id/verification
+```
+
+Protected admin endpoint.
+
+#### Request Body
+
+```json
+{
+    "status": "approved" // or "rejected"
+}
+```
+
+#### Response 200
+
+```json
+{
+    "success": true,
+    "message": "Vehicle verification status updated successfully",
+    "data": {
+        "vehicle": {
+            "id": "vehicle_uuid",
+            "driver_id": "driver_uuid",
+            "make": "Honda",
+            "model": "Civic",
+            "year": 2022,
+            "plate_number": "ABC-1234",
+            "color": "Black",
+            "vehicle_type": "car",
+            "is_active": false,
+            "verification_status": "approved",
+            "created_at": "2026-06-10T18:41:22.064Z",
+            "updated_at": "2026-06-10T18:41:22.726Z"
+        }
+    },
+    "meta": null
+}
+```
+
+---
+
 ## 17. ML APIs
 
 ML can be implemented as an internal service or simple JavaScript/Python call. These endpoints are optional for frontend but useful for demo/admin screens.
@@ -4355,6 +4448,8 @@ POST   /admin/pricing-rules
 PATCH  /admin/pricing-rules/:pricing_rule_id
 PATCH  /admin/driver-documents/:document_id/review
 PATCH  /admin/drivers/:driver_id/approval
+GET    /admin/vehicles/pending
+PATCH  /admin/vehicles/:vehicle_id/verification
 POST   /admin/surge-zones
 GET    /admin/ml-models
 GET    /admin/rides/:ride_id/fare-prediction-logs

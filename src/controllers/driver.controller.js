@@ -707,7 +707,7 @@ const updateVehicle = asyncHandler(async (req, res) => {
                     updated_at: updatedVehicle.updatedAt
                 }
             },
-            "Vehicle updated successfully"
+            "Vehicle updated successfully",verification_status
         )
     );
 });

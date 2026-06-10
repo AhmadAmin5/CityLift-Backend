@@ -218,6 +218,22 @@ const formatDriverDocument = (doc) => ({
     verified_at: doc.verifiedAt
 });
 
+const formatVehicle = (vehicle) => ({
+    id: vehicle.id,
+    driver_id: vehicle.driverId,
+    make: vehicle.make,
+    model: vehicle.model,
+    year: vehicle.year,
+    plate_number: vehicle.plateNumber,
+    color: vehicle.color,
+    vehicle_type: vehicle.vehicleType,
+    is_active: vehicle.isActive,
+    verification_status: vehicle.verificationStatus,
+    created_at: vehicle.createdAt,
+    updated_at: vehicle.updatedAt,
+    ...(vehicle.documents && { documents: vehicle.documents.map(formatDriverDocument) })
+});
+
 const reviewDriverDocument = asyncHandler(async (req, res) => {
     const { document_id } = req.params;
     const { status, rejection_reason } = req.body;
@@ -561,6 +577,72 @@ const listDriverDocuments = asyncHandler(async (req, res) => {
     });
 });
 
+const listPendingVehicles = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const vehicles = await prisma.vehicle.findMany({
+        where: {
+            verificationStatus: "pending"
+        },
+        include: {
+            documents: true
+        },
+        orderBy: { createdAt: "desc" }
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: "Pending vehicles fetched successfully",
+        data: vehicles.map(formatVehicle),
+        meta: null
+    });
+});
+
+const ALLOWED_VEHICLE_STATUSES = ["approved", "rejected"];
+
+const updateVehicleVerification = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const { vehicle_id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+        throw new ApiError(400, "status is required");
+    }
+
+    if (!ALLOWED_VEHICLE_STATUSES.includes(status)) {
+        throw new ApiError(400, "Invalid status. Allowed: approved, rejected");
+    }
+
+    const existingVehicle = await prisma.vehicle.findUnique({
+        where: { id: vehicle_id }
+    });
+
+    if (!existingVehicle) {
+        throw new ApiError(404, "Vehicle not found");
+    }
+
+    const updatedVehicle = await prisma.vehicle.update({
+        where: { id: vehicle_id },
+        data: {
+            verificationStatus: status
+        }
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: "Vehicle verification status updated successfully",
+        data: {
+            vehicle: formatVehicle(updatedVehicle)
+        },
+        meta: null
+    });
+});
+
 export {
     listPricingRules,
     createPricingRule,
@@ -570,5 +652,7 @@ export {
     upsertSurgeZone,
     listMlModels,
     getFarePredictionLogs,
-    listDriverDocuments
+    listDriverDocuments,
+    listPendingVehicles,
+    updateVehicleVerification
 };

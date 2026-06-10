@@ -11,8 +11,15 @@ import {
     upsertSurgeZone,
     listMlModels,
     getFarePredictionLogs,
-    listDriverDocuments
+    listDriverDocuments,
+    listPendingVehicles,
+    updateVehicleVerification
 } from "../controllers/admin.controller.js";
+import {
+    getPopularRoutes,
+    getCollusionDetection,
+    getDriverDensity
+} from "../controllers/adminGraph.controller.js";
 
 const router = Router();
 
@@ -37,10 +44,18 @@ router.patch("/driver-documents/:document_id/review", reviewDriverDocument);
 
 router.patch("/drivers/:driver_id/approval", updateDriverApproval);
 
+router.get("/vehicles/pending", listPendingVehicles);
+
+router.patch("/vehicles/:vehicle_id/verification", updateVehicleVerification);
+
 router.post("/surge-zones", upsertSurgeZone);
 
 router.get("/ml-models", listMlModels);
 
 router.get("/rides/:ride_id/fare-prediction-logs", getFarePredictionLogs);
+
+router.get("/analytics/graph/popular-routes", getPopularRoutes);
+router.get("/analytics/graph/collusion-detection", getCollusionDetection);
+router.get("/analytics/graph/driver-density", getDriverDensity);
 
 export default router;
