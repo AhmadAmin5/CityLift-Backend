@@ -1,11 +1,31 @@
 # CityLift Backend
 
+<div align="center">
+  <img src="CoverImage.png" alt="CoverPhoto" width="600"/>
+</div>
+
 A scalable Node.js + Express backend powering **CityLift**, a ride-hailing platform that connects riders and drivers through real-time ride booking, navigation, fare estimation, and trip management.
 
 Unlike traditional CRUD applications, CityLift is built using a **polyglot persistence architecture**, leveraging **PostgreSQL**, **MongoDB**, and **Neo4j** to store and process different types of data based on their strengths, and a custom-trained AI model for fair fare calculation. The backend also integrates mapping, routing, weather, pricing, and real-time communication services to provide a complete ride-booking experience.
 
 
 > You may also want to check the **[CityLift Frontend](https://github.com/AhmadAmin5/CityLift-Ride-Frontend.git)** repository for the client application.
+
+>[Watch working video](https://www.linkedin.com/posts/ahmadamin5_most-ride-hailing-apps-in-pakistan-solve-ugcPost-7473775508078379008-EEou/)
+<table>
+  <tr>
+    <td align="center">
+      <img src="screenshots/Screenshot1.png" alt="Booking Ride" width="100%">
+      <br>
+      <em>Booking Ride</em>
+    </td>
+    <td align="center">
+      <img src="screenshots/Screenshot2.png" alt="Ride Started" width="97%">
+      <br>
+      <em>Ride Started</em>
+    </td>
+  </tr>
+</table>
 
 ---
 
