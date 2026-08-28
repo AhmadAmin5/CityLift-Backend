@@ -132,6 +132,85 @@ All of these (note: **no** `wait_time_min`; cars/parcel only):
 
 ---
 
+## Where each `rawInput` field comes from in production
+
+The ML side doesn't fetch any of these — the caller (backend quote endpoint) collects them
+and passes them in. This section is the integration cheat sheet: which existing service /
+DB / external API supplies each field. **`needs adding`** means the source doesn't exist in
+the codebase yet at the time of writing.
+
+### 1. Trip geometry — Google Routes API (`src/services/googleRoutes.service.js`, wired)
+
+| Field | How to obtain |
+|---|---|
+| `distance_km` | `route.distanceMeters / 1000` |
+| `travel_time_min` | `route.duration` (seconds) ÷ 60. Use **traffic-aware** duration for city, free-flow for intercity. |
+| `traffic_ratio` | `duration_in_traffic / duration_static` — request both by calling Routes with `TRAFFIC_AWARE` and `TRAFFIC_UNAWARE` routing preferences. 1.0 = free flow, 2.0 = stuck. |
+| `avg_speed_kmh` | Derived: `distance_km / (travel_time_min / 60)`. Don't store separately. |
+
+### 2. Pickup wait — driver-matching layer (city only)
+
+| Field | How to obtain |
+|---|---|
+| `wait_time_min` | After matching the nearest driver, call Google Routes from `driver.currentLocation → pickup` and take the duration in minutes. Source data: `src/models/driverLocation.model.js`. |
+
+### 3. Weather — external API (**needs adding**)
+
+| Field | How to obtain |
+|---|---|
+| `weather_code` (0–7) | Call a weather API at pickup lat/lng and map the provider's condition code into the 0–7 legend above. |
+| `rain_mm` | precipitation in last hour (mm) |
+| `visibility_m` | direct field |
+| `wind_speed` | km/h (convert from m/s if needed) |
+| `feels_like_temp` | apparent temperature °C |
+| `dest_weather_code`, `dest_rain_mm` (intercity) | Same API, queried at **destination** lat/lng. |
+
+**Recommended provider:** [Open-Meteo](https://open-meteo.com/) — free, no API key required,
+returns all of the above in a single call. Backup: OpenWeather free tier. Cache responses
+per-zone for ~10 min so the API isn't hit on every quote.
+
+### 4. Supply / demand — your own DB
+
+| Field | How to obtain |
+|---|---|
+| `zone_driver_count` | Count drivers currently in the pickup zone. Use `src/services/neo4j/driverArea.service.js` (already wired). |
+| `demand_ratio` | `(open ride requests in zone in last 5–10 min) ÷ (available drivers in zone)`. **Needs adding** — implement as a rolling-window aggregator (Redis sliding window, or a 1-minute cron job that snapshots into Postgres). |
+
+### 5. Time / calendar — server clock + lookup tables
+
+| Field | How to obtain |
+|---|---|
+| `hour`, `day`, `month` | `new Date()` in `Asia/Karachi`. ⚠️ Match the convention used in training: `day` is 0 = Mon. |
+| `is_weekend` | In Pakistan: Sat + Sun. Derive from `day`. |
+| `is_public_holiday` | Static JSON file (`pakistan_holidays_<year>.json`) in the repo, or a calendar API (e.g. Calendarific). Static is fine — holidays are known in advance. |
+| `is_ramadan` | Use the [`moment-hijri`](https://www.npmjs.com/package/moment-hijri) npm package, or a small hardcoded date-range table. **Needs adding.** |
+
+### 6. Intercity-only fields
+
+| Field | How to obtain |
+|---|---|
+| `booking_lead_time_hours` | `(scheduledPickupTime - now) / 3_600_000`. Comes straight from the booking request body. |
+| `toll_cost` | Google Routes returns tolls when called with `extraComputations: ["TOLLS"]`. Alternative: maintain a static route→toll table (Pakistan toll structure is stable, e.g. Lahore↔Islamabad motorway ~PKR 1500). |
+| `dead_return_factor` | Heuristic: check whether there is matchable return demand at the destination in the scheduled return window. If yes → 1.0, if no → 1.3–1.6. **Start with a constant 1.3** and refine later once booking history exists. |
+| `seats_booked` | From booking input. Parcel always 1. |
+| `seat_capacity` | Constant per vehicle: `minicar` = 4, `economy` = 4, `parcel` = 1. |
+| `cancellation_risk` | `(rider's cancelled bookings) / (rider's total bookings)` from the bookings table. **Default 0.1** for new riders with no history. |
+
+### Readiness snapshot
+
+| Source | Status |
+|---|---|
+| Google Routes (geometry, traffic, tolls) | ✅ wired |
+| Driver locations + zone counts (Neo4j) | ✅ wired |
+| Booking inputs (lead time, seats, scheduled time) | ✅ from request body |
+| Server clock + day/weekend flags | ✅ trivial |
+| Weather API | ❌ needs adding (Open-Meteo recommended) |
+| `demand_ratio` rolling aggregator | ❌ needs adding |
+| Holiday + Ramadan lookups | ❌ small JSON / npm package |
+| Rider cancellation rate | ⚠️ available once bookings exist; default `0.1` until then |
+
+---
+
 ## Fare estimate — calibration note
 
 `estimateFare` is intentionally simple and transparent:

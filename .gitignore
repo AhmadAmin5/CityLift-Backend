@@ -28,3 +28,6 @@ Thumbs.db
 /src/generated/prisma
 
 code.zip
+
+# ML generated datasets (reproducible from ml/configs/ via ml/data/generator.js)
+ml/data/datasets/*.csv
